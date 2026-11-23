@@ -1,0 +1,40 @@
+{
+  "name": "family-tree-server",
+  "version": "0.1.0",
+  "description": "家族族谱管理系统 - 阶段1 MVP（单管理员：成员/关系/世系树/导入导出）",
+  "type": "module",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "seed": "node scripts/seed.js",
+    "test:api": "node scripts/smoke-test.mjs",
+    "test:ui": "node scripts/ui-test.mjs",
+    "test:unit": "node --test tests/",
+    "test": "node --test tests/ && node scripts/smoke-test.mjs && node scripts/ui-test.mjs",
+    "restore": "node scripts/restore.js",
+    "demo:five": "node scripts/make-five-generations.mjs",
+    "test:concurrency": "node scripts/concurrency-test.mjs",
+    "test:all": "node --test tests/ && node scripts/smoke-test.mjs && node scripts/concurrency-test.mjs && node scripts/ui-test.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.17",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.5.0",
+    "pg": "^8.12.0"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "playwright-core": "^1.65.1"
+  }
+}
