@@ -13,12 +13,12 @@
     "seed": "node scripts/seed.js",
     "test:api": "node scripts/smoke-test.mjs",
     "test:ui": "node scripts/ui-test.mjs",
-    "test:unit": "node --test tests/",
-    "test": "node --test tests/ && node scripts/smoke-test.mjs && node scripts/ui-test.mjs",
+    "test:unit": "node --test \"tests/**/*.test.mjs\"",
+    "test": "node --test \"tests/**/*.test.mjs\" && node scripts/smoke-test.mjs && node scripts/ui-test.mjs",
     "restore": "node scripts/restore.js",
     "demo:five": "node scripts/make-five-generations.mjs",
     "test:concurrency": "node scripts/concurrency-test.mjs",
-    "test:all": "node --test tests/ && node scripts/smoke-test.mjs && node scripts/concurrency-test.mjs && node scripts/ui-test.mjs"
+    "test:all": "node --test \"tests/**/*.test.mjs\" && node scripts/smoke-test.mjs && node scripts/concurrency-test.mjs && node scripts/ui-test.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.17",
