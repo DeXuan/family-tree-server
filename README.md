@@ -46,6 +46,14 @@
 | 方言称谓 | ✅ | 吴/粤/闽南/客家/西南/胶辽六区词表；称谓弹窗并列显示标准与方言，支持对照表预览 |
 | 收藏地实体 | ✅ | 档案馆/藏书楼可复用的 Repository，与来源多对一关联；删除前提示引用数 |
 | 沙漏 SVG 导出 | ✅ | 上溯祖先 + 下延后裔的单图合成，SVG 可直接下载/打印 |
+| 祖先盘图表 | ✅ | 扇形同心环，左父系右母系，逐代外扩；SVG 下载 |
+| 服务端 PDF | ✅ | 无头 Chromium 直接输出 PDF（宗谱/个人谱/洞察报告），票据一次性 |
+| 地图瓦片（可选） | ✅ | 默认纯离线自绘；配置 `MAP_TILE_URL` 后叠加真实底图，CSP 自动放行 |
+| 自定义关联角色 | ✅ | 内置 11 种 + 家族自定义（≤30 个），人物页可管理 |
+| 方言词条自定义 | ✅ | 六区词表之上可逐条覆盖（如「父亲」→「阿爹」），称谓推导即时生效 |
+| PWA / 离线 | ✅ | manifest + Service Worker，断网可打开登录页；API 一律不缓存 |
+| 多家族（多租户） | ✅ | AsyncLocalStorage 请求级隔离，家族切换器，跨家族数据不串 |
+| 旧谱 OCR 适配 | ✅ | 可插拔 OCR 后端 + 繁简/竖排/噪声清理管线 |
 | 世系凡例 | ✅ | 男/女/已故/配偶/折叠符号说明，避免符号误读 |
 | 口述/表格建谱 | ✅ | 一段话或粘贴表格 → 解析草稿 → 人工校对 → 确认导入；不确定关系给提示 |
 | 地点库与迁徙 | ✅ | 地点规范名+别名归一、成员自动归类、省份分布、未收录地名、迁徙路径（事件驱动）；地点可设上级层级、可合并 |
@@ -83,7 +91,7 @@
 - **导入导出**：exceljs、自研 GEDCOM 5.5.1 读写
 - **测试**：自研 HTTP 冒烟测试 + Playwright（复用本机 Chrome）
 
-单元测试 154 项、后端 API 断言 207 项、并发一致性 5 项、浏览器 UI 断言 98 项，共 464 项断言，全部通过。
+单元测试 258 项、后端 API 断言 207 项、并发一致性 5 项、浏览器 UI 断言 98 项，共 568 项断言，全部通过。
 
 ---
 
@@ -268,6 +276,23 @@ GET    /api/tree/path?a=&b=             最近共同祖先与距离
 GET    /api/tree/ancestors/:personId    祖先链（沙漏视图数据）
 GET    /api/tree/export.svg             导出世系 SVG（root/depth/title）
 GET    /api/tree/hourglass.svg          沙漏 SVG（focus/up/down/title）
+GET    /api/tree/ancestors.svg           祖先盘 SVG（focus/depth/title）
+GET    /api/export/pdf/capability        PDF 能力探测
+POST   /api/export/pdf/ticket            签发一次性 PDF 票据
+GET    /api/export/pdf/render?ticket=    渲染并下载 PDF
+GET    /api/families                     可访问家族列表
+POST   /api/families                     新建家族（admin）
+PUT    /api/families/current             改当前家族（本家族 admin）
+DELETE /api/families/:id                 删除家族（需输入名称确认）
+GET    /api/associations/roles           关联角色清单（内置+自定义）
+POST   /api/associations/roles           新增自定义角色
+DELETE /api/associations/roles/:key      删除自定义角色
+GET    /api/admin/dialect-overrides      方言自定义词条
+PUT    /api/admin/dialect-overrides      新增/覆盖词条
+DELETE /api/admin/dialect-overrides      删除词条
+GET    /api/import/ocr/capability        OCR 能力探测
+POST   /api/import/ocr                   上传旧谱图片识别
+POST   /api/import/ocr/clean             仅清理 OCR 文本
 GET    /api/tree/kinship/dialects       方言称谓对照表（dialect）
 GET    /api/tree/kinship?a=&b=          中文称谓推导（含反向称谓、五服判断）
 GET    /api/tree/five-fu?center=        五服范围内的亲属
@@ -459,23 +484,23 @@ deploy.bat           # Windows CMD
 **限制**
 
 - 媒体压缩在前端完成（长边 1920、质量 0.85，压不小则回退原图），未生成服务端缩略图；大相册仍一次性加载元数据
-- 真实地图瓦片未接入（离线与隐私取舍），地点视图为省市聚合 + 迁徙路径 + 本地 SVG 简图
-- PDF 为浏览器打印排版，未做服务端原生 PDF 合成（字体嵌入/分页控制受限）
-- 方言称谓为内置六区词表（吴/粤/闽南/客家/西南/胶辽），不支持用户自定义词条
-- 单家族实例（数据模型已带 `family_id`，可平滑扩为多家族）
+- 地图瓦片默认关闭（隐私友好）；配置 `MAP_TILE_URL` 后可叠加真实底图，但需自备瓦片源
+- 服务端 PDF 依赖本机 Chromium（`npx playwright install chromium` 或 `CHROMIUM_PATH`）；未装时自动退回浏览器打印
+- 方言内置六区词表（吴/粤/闽南/客家/西南/胶辽），支持逐条自定义覆盖（上限 60 条）
+- 多家族已支持（请求级租户隔离），但共享同一 PGlite 数据库；更大规模建议切 PostgreSQL
 - 族谱树一次性加载（数千人内可用；更大规模需虚拟化/懒加载）
 - 邀请绑定成员后仍依赖管理员核对身份（无短信/实名验证）
 - PGlite 不支持 pg_trgm，姓名检索在大数据量下为顺序扫描（PostgreSQL 部署可自行加 GIN 索引）
-- 人物关联仅覆盖 11 种常见角色，未做角色自定义；乐观锁粒度到成员，不含关系与事件
-- 口述建谱只覆盖常见称呼（父母/子女/配偶），祖辈与旁系需先有中间一代，解析结果必须人工确认
+- 人物关联内置 11 种角色并支持自定义；乐观锁粒度到成员，不含关系与事件
+- 口述建谱覆盖父母/子女/配偶/祖辈/兄弟姐妹；祖辈与旁系会自动补占位中间代，仍需人工补填姓名
 - PGlite 为单写者：程序已加锁，同一数据目录只允许一个进程打开（多开会导致数据损坏）
 
 **路线图**
 
 - **阶段 2（已完成）**：隐私分级、个人中心、邀请注册、生平事件、关系路径、备份恢复、静态加密、媒体库、变更提案、查重合并、沙漏视图、来源/引文、SVG 导出、称谓推导/五服、家族洞察、凡例、口述/表格建谱、地点库与迁徙、人物关联、资料完整度、批量编辑、乐观锁、故事与回忆录、2FA、本地地图、打印/PDF、故事版本历史、字辈派语校验、故事表格、婚姻状态编辑、合并逐字段取舍、收藏地实体、前端图片压缩、方言称谓、沙漏 SVG 合成
 - **工程健壮性（已完成）**：异步路由统一错误捕获、结构化日志、统一请求体校验、慢查询告警、前端纯函数单测、并发一致性测试
-- **阶段 3（待办）**：祖先盘布局、竖版 PDF 打印谱（服务端合成）、地图瓦片可选接入、自定义关联角色、方言词条自定义
-- **阶段 4（远期）**：移动端/PWA、多家族 SaaS、旧谱 OCR 与口述史转写
+- **阶段 3（已完成）**：祖先盘布局、服务端 PDF 合成、地图瓦片可选接入、自定义关联角色、方言词条自定义
+- **阶段 4（已完成）**：PWA/离线、多家族多租户、旧谱 OCR 适配与口述转写增强（祖辈/旁系自动补中间代）
 
 
 ---

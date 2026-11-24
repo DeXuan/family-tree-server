@@ -7,6 +7,7 @@ import { query } from '../db/db.js';
 import { auth, editorUp } from '../middleware/auth.js';
 import { audit } from './audit.js';
 import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { logger } from '../modules/logger.js';
 import { imageSize } from '../modules/imageSize.js';
 import { uuidParam } from '../middleware/params.js';
@@ -14,7 +15,6 @@ import { uuidParam } from '../middleware/params.js';
 const router = express.Router();
 router.param('personId', uuidParam);
 router.param('id', uuidParam);
-const FAMILY_ID = config.familyId;
 
 /** 允许的类型：mime → 扩展名 + 归类（排除 SVG，避免内联脚本风险） */
 const ALLOWED = {
@@ -69,7 +69,7 @@ function viewerRank(req, person) {
 async function getPerson(personId) {
   const { rows } = await query(
     'SELECT id, family_name, given_name, status FROM person WHERE id = $1 AND family_id = $2',
-    [personId, FAMILY_ID]
+    [personId, currentFamilyId()]
   );
   return rows[0] || null;
 }
@@ -79,7 +79,7 @@ async function getMediaWithTarget(mediaId) {
     `SELECT m.*, ml.target_id AS person_id
      FROM media m JOIN media_link ml ON ml.media_id = m.id AND ml.target_type = 'person'
      WHERE m.id = $1 AND m.family_id = $2 LIMIT 1`,
-    [mediaId, FAMILY_ID]
+    [mediaId, currentFamilyId()]
   );
   return rows[0] || null;
 }
@@ -130,7 +130,7 @@ router.post('/person/:personId', auth, editorUp, upload.single('file'), async (r
       `INSERT INTO media (id, family_id, file_key, original_name, mime, size_bytes,
          media_type, caption, visibility, uploaded_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [mediaId, FAMILY_ID, fileKey, req.file.originalname.slice(0, 200), req.file.mimetype,
+      [mediaId, currentFamilyId(), fileKey, req.file.originalname.slice(0, 200), req.file.mimetype,
         req.file.size, meta.type, caption, visibility, req.user.id]
     );
     await query(
@@ -144,7 +144,7 @@ router.post('/person/:personId', auth, editorUp, upload.single('file'), async (r
   }
 
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'create', entityType: 'media', entityId: mediaId,
     after: { personId: person.id, name: req.file.originalname, type: meta.type, visibility },
@@ -165,7 +165,7 @@ router.get('/', auth, async (req, res) => {
      JOIN person p ON p.id = ml.target_id
      WHERE m.family_id = $1 AND m.media_type = 'image'
      ORDER BY m.created_at DESC LIMIT 200`,
-    [FAMILY_ID]
+    [currentFamilyId()]
   );
   res.json(rows
     .filter((m) => ({ L0: 0, L1: 1, L2: 2 }[m.visibility] ?? 1) <= maxRank)
@@ -190,7 +190,7 @@ router.get('/person/:personId', auth, async (req, res) => {
      JOIN media_link ml ON ml.media_id = m.id AND ml.target_type = 'person'
      WHERE ml.target_id = $1 AND m.family_id = $2
      ORDER BY m.created_at DESC`,
-    [person.id, FAMILY_ID]
+    [person.id, currentFamilyId()]
   );
   const maxRank = viewerRank(req, person);
   res.json(rows
@@ -229,7 +229,7 @@ router.delete('/:id', auth, editorUp, async (req, res) => {
   await query('DELETE FROM media WHERE id = $1', [media.id]);
   fs.rmSync(absPath(media.file_key), { force: true });
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'delete', entityType: 'media', entityId: media.id,
     before: { personId: media.person_id, name: media.original_name },

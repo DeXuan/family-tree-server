@@ -16,6 +16,11 @@ export const config = {
   backupIntervalHours: parseFloat(process.env.BACKUP_INTERVAL_HOURS || '0'),
   seedOnEmpty: process.env.SEED_ON_EMPTY === 'true',
   isProd: process.env.NODE_ENV === 'production',
+  // 地图瓦片（可选）：留空 = 纯离线自绘示意图；填入 XYZ 模板即启用真实底图
+  // 例：MAP_TILE_URL=https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png
+  mapTileUrl: process.env.MAP_TILE_URL || '',
+  mapTileAttribution: process.env.MAP_TILE_ATTRIBUTION || '',
+  mapTileMaxZoom: Math.min(19, Math.max(1, parseInt(process.env.MAP_TILE_MAX_ZOOM || '18', 10))),
 };
 
 // 隐私级别

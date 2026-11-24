@@ -8,10 +8,9 @@ import { audit } from './audit.js';
 import { personsToExcel, excelToPersons } from '../modules/excel.js';
 import { exportGedcom, parseGedcom } from '../modules/gedcom.js';
 import { tryDecryptJSON } from '../modules/crypto.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -25,12 +24,12 @@ const upload = multer({
 async function loadAll() {
   const [{ rows: persons }, { rows: parentChild }, { rows: unions }, { rows: fam }] = await Promise.all([
     query(`SELECT * FROM person WHERE family_id = $1 AND status = 'active'
-           ORDER BY generation_no NULLS LAST, family_name, given_name`, [FAMILY_ID]),
+           ORDER BY generation_no NULLS LAST, family_name, given_name`, [currentFamilyId()]),
     query(`SELECT pc.* FROM parent_child pc JOIN person p ON p.id = pc.child_id
-           WHERE p.family_id = $1`, [FAMILY_ID]),
+           WHERE p.family_id = $1`, [currentFamilyId()]),
     query(`SELECT u.* FROM marriage u JOIN person p ON p.id = u.person_a_id
-           WHERE p.family_id = $1`, [FAMILY_ID]),
-    query('SELECT name FROM family WHERE id = $1', [FAMILY_ID]),
+           WHERE p.family_id = $1`, [currentFamilyId()]),
+    query('SELECT name FROM family WHERE id = $1', [currentFamilyId()]),
   ]);
   // 导出给管理员：联系方式解密后输出，便于带离与迁移
   const plainPersons = persons.map((p) => ({ ...p, contact: tryDecryptJSON(p.contact) }));
@@ -41,8 +40,8 @@ async function loadAll() {
 router.get('/json', auth, adminOnly, async (req, res) => {
   const data = await loadAll();
   await audit({
-    familyId: FAMILY_ID, actorUserId: req.user.id, actorLabel: req.user.username,
-    action: 'export', entityType: 'family', entityId: FAMILY_ID, after: { format: 'json' },
+    familyId: currentFamilyId(), actorUserId: req.user.id, actorLabel: req.user.username,
+    action: 'export', entityType: 'family', entityId: currentFamilyId(), after: { format: 'json' },
   });
   res.setHeader('Content-Disposition', 'attachment; filename="family-tree-export.json"');
   res.json({ exportedAt: new Date().toISOString(), ...data });
@@ -52,8 +51,8 @@ router.get('/excel', auth, adminOnly, async (req, res) => {
   const { persons } = await loadAll();
   const buf = await personsToExcel(persons);
   await audit({
-    familyId: FAMILY_ID, actorUserId: req.user.id, actorLabel: req.user.username,
-    action: 'export', entityType: 'family', entityId: FAMILY_ID, after: { format: 'excel' },
+    familyId: currentFamilyId(), actorUserId: req.user.id, actorLabel: req.user.username,
+    action: 'export', entityType: 'family', entityId: currentFamilyId(), after: { format: 'excel' },
   });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="family-tree.xlsx"');
@@ -64,8 +63,8 @@ router.get('/gedcom', auth, adminOnly, async (req, res) => {
   const { persons, parentChild, unions, familyName } = await loadAll();
   const text = exportGedcom(persons, parentChild, unions, familyName);
   await audit({
-    familyId: FAMILY_ID, actorUserId: req.user.id, actorLabel: req.user.username,
-    action: 'export', entityType: 'family', entityId: FAMILY_ID, after: { format: 'gedcom' },
+    familyId: currentFamilyId(), actorUserId: req.user.id, actorLabel: req.user.username,
+    action: 'export', entityType: 'family', entityId: currentFamilyId(), after: { format: 'gedcom' },
   });
   res.setHeader('Content-Type', 'application/x-gedcom; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="family-tree.ged"');
@@ -107,7 +106,7 @@ router.post('/preview', auth, adminOnly, upload.single('file'), async (req, res)
         `SELECT id, family_name, given_name, birth_date FROM person
          WHERE family_id = $1 AND family_name = $2 AND given_name = $3
            AND ($4::date IS NULL OR birth_date = $4::date) AND status = 'active' LIMIT 1`,
-        [FAMILY_ID, p.family_name || '', p.given_name || '', p.birth_date || null]
+        [currentFamilyId(), p.family_name || '', p.given_name || '', p.birth_date || null]
       );
       if (rows.length) {
         conflicts.push({ incoming: `${p.family_name}${p.given_name}`, existingId: rows[0].id, reason: '姓名+出生日期完全一致' });
@@ -165,7 +164,7 @@ router.post('/commit', auth, adminOnly, async (req, res) => {
         const dup = await client.query(
           `SELECT id FROM person WHERE family_id = $1 AND family_name = $2 AND given_name = $3
              AND ($4::date IS NULL OR birth_date = $4::date) AND status = 'active' LIMIT 1`,
-          [FAMILY_ID, p.family_name || '', p.given_name || '', p.birth_date || null]
+          [currentFamilyId(), p.family_name || '', p.given_name || '', p.birth_date || null]
         );
         if (dup.rows.length && skipConflicts) { skipped++; continue; }
 
@@ -177,7 +176,7 @@ router.post('/commit', auth, adminOnly, async (req, res) => {
              death_date, death_precision, death_date_end, death_place, burial_place,
              is_deceased, occupation, bio)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
-          [id, FAMILY_ID, p.family_name || '', p.given_name || '', p.courtesy_name || '',
+          [id, currentFamilyId(), p.family_name || '', p.given_name || '', p.courtesy_name || '',
            p.generation_name || '', p.generation_no ?? null, p.branch || '', p.gender || 'unknown',
            p.birth_date || null, p.birth_precision || 'unknown', p.birth_date_end || null, p.birth_place || '',
            p.death_date || null, p.death_precision || 'unknown', p.death_date_end || null,
@@ -228,8 +227,8 @@ router.post('/commit', auth, adminOnly, async (req, res) => {
     });
 
     await audit({
-      familyId: FAMILY_ID, actorUserId: req.user.id, actorLabel: req.user.username,
-      action: 'import', entityType: 'family', entityId: FAMILY_ID, after: report,
+      familyId: currentFamilyId(), actorUserId: req.user.id, actorLabel: req.user.username,
+      action: 'import', entityType: 'family', entityId: currentFamilyId(), after: report,
     });
     res.json({ ok: true, ...report });
   } catch (err) {

@@ -1130,6 +1130,14 @@ function wireAssociations(root, person, initial) {
 
   root.querySelector('#add-assoc')?.addEventListener('click', async () => {
     const picked = await pickPerson('选择关联成员', person.id);
+
+    // 拉取可用角色（内置 + 自定义），失败时退回内置词表
+    let roleOptions = Object.entries(ASSOC_ROLES);
+    try {
+      const roleRes = await api('/api/associations/roles');
+      roleOptions = roleRes.roles.map((r) => [r.key, r.label]);
+      if (session.canEdit) roleOptions = [...roleOptions, ['__manage', '＋ 管理自定义角色…']];
+    } catch { /* 保持内置兜底 */ }
     if (!picked) return;
 
     const m = openModal({
@@ -1138,7 +1146,7 @@ function wireAssociations(root, person, initial) {
         <div class="stack-8">
           <div class="field"><label for="as-role">关联类型</label>
             <select id="as-role">
-              ${Object.entries(ASSOC_ROLES).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+              ${roleOptions.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join('')}
             </select>
           </div>
           <div class="field"><label for="as-note">说明</label><input id="as-note" placeholder="如：同村邻里、婚宴见证"></div>
@@ -1147,6 +1155,14 @@ function wireAssociations(root, person, initial) {
       footer: `<button class="btn" type="button" data-act="cancel">取消</button>
                <button class="btn btn-primary" type="button" data-act="ok">添加</button>`,
     });
+    // 「管理自定义角色」：以 layered 方式叠加，不关闭当前弹窗
+    const roleSel = m.el.querySelector('#as-role');
+    roleSel?.addEventListener('change', async () => {
+      if (roleSel.value !== '__manage') return;
+      await openRoleManager();
+      roleSel.value = roleOptions[0]?.[0] || 'other';
+    });
+
     const errBox = m.el.querySelector('#as-error');
     m.el.querySelector('[data-act="cancel"]').addEventListener('click', () => m.close());
     m.el.querySelector('[data-act="ok"]').addEventListener('click', async (e) => {
@@ -1184,5 +1200,99 @@ function wireAssociations(root, person, initial) {
       toast('关联已删除', 'ok');
       await reload();
     } catch (err) { toast(err.message, 'error'); }
+  });
+}
+
+/**
+ * 自定义关联角色管理（layered 弹窗）：列出内置/自定义角色，可新增与删除。
+ */
+async function openRoleManager() {
+  let data;
+  try { data = await api('/api/associations/roles'); }
+  catch (err) { toast(err.message, 'error'); return; }
+
+  const renderRows = (d) => d.roles.map((r) => `
+    <tr>
+      <td>${esc(r.label)}</td>
+      <td class="mono small muted">${esc(r.key)}</td>
+      <td>${r.builtin ? '<span class="badge badge-muted">内置</span>' : '<span class="badge badge-jade">自定义</span>'}</td>
+      <td>${r.builtin ? '—' : `<button class="btn btn-sm btn-danger" type="button" data-del-role="${esc(r.key)}">删除</button>`}</td>
+    </tr>`).join('');
+
+  const m = openModal({
+    title: '关联角色管理',
+    layered: true,
+    body: `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>名称</th><th>标识</th><th>类型</th><th>操作</th></tr></thead>
+          <tbody id="role-list">${renderRows(data)}</tbody>
+        </table>
+      </div>
+      <div class="divider"></div>
+      <div class="row">
+        <div class="field flex-1"><label for="new-role-label">新增自定义角色</label>
+          <input id="new-role-label" maxlength="12" placeholder="如：族老、义兄弟、同窗"></div>
+        <div class="field flex-1"><label for="new-role-note">说明（可选）</label>
+          <input id="new-role-note" maxlength="100"></div>
+      </div>
+      <p class="small muted">自定义角色最多 30 个，名称不超过 12 字；内置角色不可删除。</p>
+      <div id="role-error" hidden></div>`,
+    footer: `<button class="btn" type="button" data-act="close">关闭</button>
+             <button class="btn btn-primary" type="button" data-act="add">新增角色</button>`,
+  });
+
+  const errBox = m.el.querySelector('#role-error');
+  const tbody = m.el.querySelector('#role-list');
+  m.el.querySelector('[data-act="close"]').addEventListener('click', () => m.close());
+
+  const bindDeletes = () => {
+    m.el.querySelectorAll('[data-del-role]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const ok = await confirmDialog('删除后该角色不能再用于新建关联（已有关联记录保留）。确认删除？', { danger: true, okText: '删除' });
+        if (!ok) return;
+        try {
+          const res = await api(`/api/associations/roles/${encodeURIComponent(btn.dataset.delRole)}`, { method: 'DELETE' });
+          data = {
+            ...data,
+            roles: data.roles.filter((r) => r.builtin)
+              .concat(res.custom.map((c) => ({ key: c.key, label: c.label, builtin: false }))),
+          };
+          tbody.innerHTML = renderRows(data);
+          bindDeletes();
+          toast('角色已删除', 'ok');
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    });
+  };
+  bindDeletes();
+
+  m.el.querySelector('[data-act="add"]').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    errBox.hidden = true;
+    btn.disabled = true;
+    try {
+      const res = await api('/api/associations/roles', {
+        method: 'POST',
+        body: {
+          label: m.el.querySelector('#new-role-label').value.trim(),
+          note: m.el.querySelector('#new-role-note').value.trim(),
+        },
+      });
+      data = {
+        ...data,
+        roles: [...data.roles, { key: res.role.key, label: res.role.label, builtin: false }],
+      };
+      tbody.innerHTML = renderRows(data);
+      bindDeletes();
+      m.el.querySelector('#new-role-label').value = '';
+      m.el.querySelector('#new-role-note').value = '';
+      toast(`已新增角色「${res.role.label}」`, 'ok');
+    } catch (err) {
+      errBox.hidden = false;
+      errBox.className = 'form-error';
+      errBox.textContent = err.message;
+    }
+    btn.disabled = false;
   });
 }

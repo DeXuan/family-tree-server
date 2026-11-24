@@ -2,20 +2,33 @@ import express from 'express';
 import { query, withTransaction } from '../db/db.js';
 import { auth, editorUp } from '../middleware/auth.js';
 import { audit } from './audit.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { parseNarrative, parseTable } from '../modules/narrativeParse.js';
 import { validatePersonInput } from '../middleware/validation.js';
 import { logger } from '../modules/logger.js';
+import multer from 'multer';
+import { callOcrService, normalizeOcrText, ocrStats, ocrCapability } from '../modules/ocr.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
+
+// OCR 图片上传：走内存不落盘（识别后即弃），只接受图片
+const ocrUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!/^image\/(png|jpe?g|webp|bmp|tiff?)$/i.test(file.mimetype)) {
+      return cb(new Error('仅支持 PNG/JPEG/WebP/BMP/TIFF 图片'));
+    }
+    cb(null, true);
+  },
+});
 
 const GENDER_LABEL = { male: '男', female: '女', unknown: '未知' };
 
 async function existingPersons() {
   const { rows } = await query(
     "SELECT id, family_name, given_name FROM person WHERE family_id = $1 AND status = 'active'",
-    [FAMILY_ID]
+    [currentFamilyId()]
   );
   return rows;
 }
@@ -45,6 +58,52 @@ function annotateDraft(draft, existing) {
 
   return { persons, relations, warnings: draft.warnings };
 }
+
+// ---------------------------------------------------------------------------
+// 旧谱 OCR：上传图片 → 识别 → 清理 → 返回可直接预览的文本
+// ---------------------------------------------------------------------------
+
+/** GET /api/import/ocr/capability —— 是否配置了 OCR 后端 */
+router.get('/ocr/capability', auth, (req, res) => {
+  res.json(ocrCapability());
+});
+
+/**
+ * POST /api/import/ocr（multipart: file）
+ * 返回清理后的文本与统计；不直接落库，前端拿到文本后走 narrative/preview。
+ */
+router.post('/ocr', auth, editorUp, ocrUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: '请上传旧谱图片' });
+
+  const result = await callOcrService({
+    buffer: req.file.buffer,
+    mime: req.file.mimetype,
+    filename: req.file.originalname || 'page.png',
+  });
+  if (!result.ok) return res.status(501).json({ error: result.error, capability: ocrCapability() });
+
+  const cleaned = normalizeOcrText(result.text);
+  if (!cleaned) return res.status(422).json({ error: '未识别到文字，请检查图片清晰度或换用更清晰的扫描件' });
+
+  res.json({
+    text: cleaned,
+    stats: ocrStats(result.text, cleaned),
+    capability: ocrCapability(),
+    hint: '可直接粘贴到「口述/表格建谱」预览，或人工校对后再导入',
+  });
+});
+
+/**
+ * POST /api/import/ocr/clean —— 只做文本清理（用户自己粘贴的 OCR 结果）
+ * 不需要 multipart，纯 JSON，便于前端在客户端先试一遍。
+ */
+router.post('/ocr/clean', auth, editorUp, (req, res) => {
+  const text = String(req.body?.text || '');
+  if (!text) return res.status(400).json({ error: '请提供文本' });
+  if (text.length > 100_000) return res.status(400).json({ error: '文本过长（上限 10 万字）' });
+  const cleaned = normalizeOcrText(text);
+  res.json({ text: cleaned, stats: ocrStats(text, cleaned) });
+});
 
 // 预检：口述 / 表格
 router.post('/narrative/preview', auth, editorUp, async (req, res) => {
@@ -97,7 +156,7 @@ router.post('/narrative/commit', auth, editorUp, async (req, res) => {
     const report = await withTransaction(async (client) => {
       const { rows: existingRows } = await client.query(
         "SELECT id, family_name, given_name FROM person WHERE family_id = $1 AND status = 'active'",
-        [FAMILY_ID]
+        [currentFamilyId()]
       );
       const byName = new Map(existingRows.map((p) => [`${p.family_name}${p.given_name}`, p.id]));
 
@@ -117,7 +176,7 @@ router.post('/narrative/commit', auth, editorUp, async (req, res) => {
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,'active')
            RETURNING id`,
           [
-            FAMILY_ID,
+            currentFamilyId(),
             name.slice(0, 1),
             name.slice(1),
             ['male', 'female'].includes(p.gender) ? p.gender : 'unknown',
@@ -180,7 +239,7 @@ router.post('/narrative/commit', auth, editorUp, async (req, res) => {
     });
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'import', entityType: 'person', entityId: null,
       after: { ...report, mode: 'narrative' },

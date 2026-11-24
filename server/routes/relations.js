@@ -4,13 +4,12 @@ import { query, withTransaction } from '../db/db.js';
 import { auth, editorUp } from '../middleware/auth.js';
 import { audit } from './audit.js';
 import { uuidParam } from '../middleware/params.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 
 const router = express.Router();
 router.param('personId', uuidParam);
 router.param('parentId', uuidParam);
 router.param('unionId', uuidParam);
-const FAMILY_ID = config.familyId;
 
 // =====================================================================
 // 亲子关系
@@ -119,7 +118,7 @@ router.post('/:personId/parents', auth, editorUp, async (req, res) => {
     if (result.error) return res.status(409).json(result);
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'create', entityType: 'parent_child',
       entityId: personId,
@@ -142,7 +141,7 @@ router.delete('/:personId/parents/:parentId', auth, editorUp, async (req, res) =
     );
     if (!rows.length) return res.status(404).json({ error: '关系不存在' });
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'delete', entityType: 'parent_child',
       entityId: personId, before: { parentId, personId },
@@ -175,7 +174,7 @@ router.post('/:personId/spouses', auth, editorUp, async (req, res) => {
       [a, b, unionType, status, startDate || null, place || '']
     );
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'create', entityType: 'union',
       entityId: a, after: { personA: a, personB: b, unionType, status, startDate, place },
@@ -201,7 +200,7 @@ router.put('/spouses/:unionId', auth, editorUp, async (req, res) => {
     `SELECT m.* FROM marriage m
      JOIN person p ON p.id = m.person_a_id
      WHERE m.id = $1 AND p.family_id = $2`,
-    [req.params.unionId, FAMILY_ID]
+    [req.params.unionId, currentFamilyId()]
   );
   if (!rows.length) return res.status(404).json({ error: '婚姻记录不存在' });
   const u = rows[0];
@@ -224,7 +223,7 @@ router.put('/spouses/:unionId', auth, editorUp, async (req, res) => {
   );
 
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'update', entityType: 'marriage', entityId: u.id,
     before: u, after: { status },
@@ -240,7 +239,7 @@ router.delete('/:personId/spouses/:unionId', auth, editorUp, async (req, res) =>
     );
     if (!rows.length) return res.status(404).json({ error: '婚姻记录不存在' });
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'delete', entityType: 'union', entityId: req.params.unionId,
     });

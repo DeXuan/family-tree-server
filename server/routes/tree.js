@@ -1,17 +1,16 @@
-import { withDialect, dialectKeys, dialectGlossary, DIALECT_LABEL } from '../modules/kinshipDialect.js';
+import { withDialect, dialectKeys, dialectGlossary, DIALECT_LABEL, withDialectAndOverrides, glossaryWithOverrides, normalizeOverrides } from '../modules/kinshipDialect.js';
 import { logger } from '../modules/logger.js';
 import express from 'express';
 import { query } from '../db/db.js';
 import { auth } from '../middleware/auth.js';
 import { isUuid, uuidParam } from '../middleware/params.js';
-import { buildDescendantSvg, buildHourglassSvg } from '../modules/svgChart.js';
+import { buildDescendantSvg, buildHourglassSvg, buildAncestorFanSvg } from '../modules/svgChart.js';
 import { buildGraph, kinship, fiveFuSet } from '../modules/kinship.js';
 import { buildInsights } from '../modules/insights.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 
 const router = express.Router();
 router.param('personId', uuidParam);
-const FAMILY_ID = config.familyId;
 
 const yearOf = (v) => {
   if (!v) return null;
@@ -46,7 +45,7 @@ router.get('/', auth, async (req, res) => {
       return res.status(400).json({ error: '参数 root 不是有效的 ID' });
     }
 
-    const params = [FAMILY_ID];
+    const params = [currentFamilyId()];
     let where = "family_id = $1 AND status = 'active'";
     if (branch) { params.push(branch); where += ` AND branch = $${params.length}`; }
     if (gen) { params.push(Number(gen)); where += ` AND generation_no = $${params.length}`; }
@@ -64,13 +63,13 @@ router.get('/', auth, async (req, res) => {
          FROM parent_child pc
          JOIN person p ON p.id = pc.child_id
          WHERE p.family_id = $1 AND p.status = 'active'`,
-        [FAMILY_ID]
+        [currentFamilyId()]
       ),
       query(
         `SELECT u.id, u.person_a_id, u.person_b_id, u.union_type, u.status
          FROM marriage u JOIN person p ON p.id = u.person_a_id
          WHERE p.family_id = $1`,
-        [FAMILY_ID]
+        [currentFamilyId()]
       ),
     ]);
 
@@ -197,18 +196,18 @@ async function loadGraph() {
               branch, gender, birth_date, birth_precision, birth_place,
               death_date, death_precision, death_place, is_deceased
        FROM person WHERE family_id = $1 AND status = 'active'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     ),
     query(
       `SELECT pc.parent_id, pc.child_id FROM parent_child pc
        JOIN person p ON p.id = pc.child_id
        WHERE p.family_id = $1 AND p.status = 'active'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     ),
     query(
       `SELECT u.person_a_id, u.person_b_id, u.union_type, u.status FROM marriage u
        JOIN person p ON p.id = u.person_a_id WHERE p.family_id = $1`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     ),
   ]);
   const byId = new Map(persons.map((p) => [p.id, {
@@ -240,16 +239,17 @@ router.get('/kinship', auth, async (req, res) => {
     }
     const aPerson = graph.byId.get(a);
     const bPerson = graph.byId.get(b);
-    const { rows: famRows } = await query('SELECT settings FROM family WHERE id = $1', [FAMILY_ID]);
+    const { rows: famRows } = await query('SELECT settings FROM family WHERE id = $1', [currentFamilyId()]);
     const dialect = famRows[0]?.settings?.dialect || 'standard';
+    const overrides = famRows[0]?.settings?.dialectOverrides || {};
     const result = kinship(a, b, graph);
     const reverse = kinship(b, a, graph);
     res.json({
       from: { id: a, name: `${aPerson.family_name || ''}${aPerson.given_name || ''}` },
       to: { id: b, name: `${bPerson.family_name || ''}${bPerson.given_name || ''}` },
-      ...withDialect(result, dialect),
+      ...withDialectAndOverrides(result, dialect, overrides),
       // 反向称谓（对方叫我什么）
-      reverse: { ...withDialect(reverse, dialect), kind: reverse.kind },
+      reverse: { ...withDialectAndOverrides(reverse, dialect, overrides), kind: reverse.kind },
       totalPersons: persons.length,
     });
   } catch (err) {
@@ -261,10 +261,13 @@ router.get('/kinship', auth, async (req, res) => {
 // 方言称谓对照表（供设置页预览/教学）
 router.get('/kinship/dialects', auth, async (req, res) => {
   const dialect = String(req.query.dialect || 'standard');
+  const { rows } = await query('SELECT settings FROM family WHERE id = $1', [currentFamilyId()]);
+  const overrides = normalizeOverrides(rows[0]?.settings?.dialectOverrides || {});
   res.json({
     dialects: dialectKeys().map((k) => ({ key: k, label: DIALECT_LABEL[k] })),
     dialect,
-    glossary: dialectGlossary(dialect),
+    glossary: glossaryWithOverrides(dialect, overrides),
+    overrides: overrides[dialect] || {},
   });
 });
 
@@ -310,7 +313,7 @@ router.get('/insights', auth, async (req, res) => {
   try {
     const { persons, edges, marriages } = await loadGraph();
     // 家族设置中的字辈派语
-    const { rows: famRows } = await query('SELECT settings, surname FROM family WHERE id = $1', [FAMILY_ID]);
+    const { rows: famRows } = await query('SELECT settings, surname FROM family WHERE id = $1', [currentFamilyId()]);
     const generationPoem = famRows[0]?.settings?.generationPoem || null;
     const surname = famRows[0]?.surname || null;
     res.json(buildInsights({ persons, edges, marriages }, { generationPoem, surname }));
@@ -335,18 +338,18 @@ router.get('/export.svg', auth, async (req, res) => {
         `SELECT id, family_name, given_name, courtesy_name, generation_no, branch,
                 gender, birth_date, death_date, is_deceased
          FROM person WHERE family_id = $1 AND status = 'active'`,
-        [FAMILY_ID]
+        [currentFamilyId()]
       ),
       query(
         `SELECT pc.parent_id, pc.child_id FROM parent_child pc
          JOIN person p ON p.id = pc.child_id
          WHERE p.family_id = $1 AND p.status = 'active'`,
-        [FAMILY_ID]
+        [currentFamilyId()]
       ),
       query(
         `SELECT u.person_a_id, u.person_b_id FROM marriage u
          JOIN person p ON p.id = u.person_a_id WHERE p.family_id = $1`,
-        [FAMILY_ID]
+        [currentFamilyId()]
       ),
     ]);
 
@@ -378,18 +381,18 @@ router.get('/hourglass.svg', auth, async (req, res) => {
         `SELECT id, family_name, given_name, courtesy_name, generation_no, branch,
                 gender, birth_date, death_date, is_deceased
          FROM person WHERE family_id = $1 AND status = 'active'`,
-        [FAMILY_ID]
+        [currentFamilyId()]
       ),
       query(
         `SELECT pc.parent_id, pc.child_id FROM parent_child pc
          JOIN person p ON p.id = pc.child_id
          WHERE p.family_id = $1 AND p.status = 'active'`,
-        [FAMILY_ID]
+        [currentFamilyId()]
       ),
       query(
         `SELECT u.person_a_id, u.person_b_id FROM marriage u
          JOIN person p ON p.id = u.person_a_id WHERE p.family_id = $1`,
-        [FAMILY_ID]
+        [currentFamilyId()]
       ),
     ]);
     if (!persons.some((p) => p.id === focus)) {
@@ -412,6 +415,74 @@ router.get('/hourglass.svg', auth, async (req, res) => {
 });
 
 /**
+ * GET /api/tree/ancestors.svg?focus=&depth=6
+ * 祖先盘（扇形）SVG。左父系、右母系，向外逐代展开。
+ */
+router.get('/ancestors.svg', auth, async (req, res) => {
+  try {
+    const { focus, depth = 6, title = '祖先盘' } = req.query;
+    if (!focus || !isUuid(focus)) return res.status(400).json({ error: '参数 focus 无效' });
+    const [{ rows: persons }, { rows: edges }] = await Promise.all([
+      query(
+        `SELECT id, family_name, given_name, courtesy_name, generation_no, branch,
+                gender, birth_date, death_date, is_deceased
+         FROM person WHERE family_id = $1 AND status = 'active'`,
+        [currentFamilyId()]
+      ),
+      query(
+        `SELECT pc.parent_id, pc.child_id FROM parent_child pc
+         JOIN person p ON p.id = pc.child_id
+         WHERE p.family_id = $1 AND p.status = 'active'`,
+        [currentFamilyId()]
+      ),
+    ]);
+    const byId = new Map(persons.map((p) => [p.id, p]));
+    const focusPerson = byId.get(focus);
+    if (!focusPerson) return res.status(404).json({ error: '成员不存在' });
+
+    const parentMap = new Map();
+    for (const e of edges) {
+      if (!parentMap.has(e.child_id)) parentMap.set(e.child_id, []);
+      parentMap.get(e.child_id).push(e.parent_id);
+    }
+
+    const maxDepth = Math.min(6, Math.max(1, Number(depth) || 6));
+    const ancestors = [];
+    const visited = new Set([focus]);
+    const queue = [{ id: focus, distance: 0 }];
+    while (queue.length) {
+      const cur = queue.shift();
+      if (cur.distance >= maxDepth) continue;
+      for (const pid of parentMap.get(cur.id) || []) {
+        if (visited.has(pid)) continue;
+        const p = byId.get(pid);
+        if (!p) continue;
+        visited.add(pid);
+        ancestors.push({
+          distance: cur.distance + 1,
+          relation: p.gender === 'female' ? '母' : '父',
+          person: p,
+        });
+        queue.push({ id: pid, distance: cur.distance + 1 });
+      }
+    }
+
+    const svg = buildAncestorFanSvg({
+      focus: focusPerson,
+      ancestors,
+      title: String(title).slice(0, 60) || '祖先盘',
+    });
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="ancestors.svg"');
+    res.send(svg);
+  } catch (err) {
+    logger.error('[tree] ancestors svg:', err);
+    res.status(500).json({ error: '生成祖先盘失败' });
+  }
+});
+
+
+/**
  * GET /api/tree/ancestors/:personId?depth=6
  * 向上追溯祖先，返回扁平列表（含距中心代数），供沙漏/祖先视图使用。
  */
@@ -424,7 +495,7 @@ router.get('/ancestors/:personId', auth, async (req, res) => {
       `SELECT id, family_name, given_name, courtesy_name, generation_name, generation_no,
               branch, gender, birth_date, death_date, is_deceased
        FROM person WHERE family_id = $1 AND status = 'active'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     );
     const byId = new Map(persons.map((p) => [p.id, p]));
     const focus = byId.get(req.params.personId);
@@ -434,7 +505,7 @@ router.get('/ancestors/:personId', auth, async (req, res) => {
       `SELECT pc.parent_id, pc.child_id, pc.relation_type, pc.certainty
        FROM parent_child pc JOIN person p ON p.id = pc.child_id
        WHERE p.family_id = $1 AND p.status = 'active'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     );
     const parentMap = new Map();
     for (const e of edges) {

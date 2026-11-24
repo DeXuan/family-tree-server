@@ -2,20 +2,19 @@ import express from 'express';
 import { query, withTransaction } from '../db/db.js';
 import { auth, adminOnly } from '../middleware/auth.js';
 import { audit } from './audit.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { uuidParam } from '../middleware/params.js';
 import { validatePersonInput } from '../middleware/validation.js';
 import { buildPersonUpdate, pickEditablePayload } from '../modules/personFields.js';
 import { logger } from '../modules/logger.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 router.param('id', uuidParam);
 
 async function getPerson(personId) {
   const { rows } = await query(
     "SELECT id, family_name, given_name, status FROM person WHERE id = $1 AND family_id = $2",
-    [personId, FAMILY_ID]
+    [personId, currentFamilyId()]
   );
   return rows[0] || null;
 }
@@ -50,11 +49,11 @@ router.post('/', auth, async (req, res) => {
   const { rows } = await query(
     `INSERT INTO change_request (family_id, person_id, requester_user_id, payload, note)
      VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-    [FAMILY_ID, person.id, req.user.id, JSON.stringify(picked), String(note).slice(0, 500)]
+    [currentFamilyId(), person.id, req.user.id, JSON.stringify(picked), String(note).slice(0, 500)]
   );
 
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'create', entityType: 'change_request', entityId: rows[0].id,
     after: { personId: person.id, fields: Object.keys(picked) },
@@ -98,7 +97,7 @@ router.get('/', auth, adminOnly, async (req, res) => {
      LEFT JOIN users u ON u.id = c.requester_user_id
      WHERE c.family_id = $1 AND c.status = $2
      ORDER BY c.created_at DESC LIMIT 100`,
-    [FAMILY_ID, status]
+    [currentFamilyId(), status]
   );
   res.json(rows.map((r) => ({
     ...r,
@@ -113,7 +112,7 @@ router.post('/:id/approve', auth, adminOnly, async (req, res) => {
     const result = await withTransaction(async (client) => {
       const { rows: reqRows } = await client.query(
         'SELECT * FROM change_request WHERE id = $1 AND family_id = $2 FOR UPDATE',
-        [req.params.id, FAMILY_ID]
+        [req.params.id, currentFamilyId()]
       );
       const change = reqRows[0];
       if (!change) return { error: '建议不存在', status: 404 };
@@ -121,7 +120,7 @@ router.post('/:id/approve', auth, adminOnly, async (req, res) => {
 
       const { rows: personRows } = await client.query(
         "SELECT * FROM person WHERE id = $1 AND family_id = $2 AND status = 'active'",
-        [change.person_id, FAMILY_ID]
+        [change.person_id, currentFamilyId()]
       );
       const person = personRows[0];
       if (!person) return { error: '成员不存在或已归档', status: 410 };
@@ -138,7 +137,7 @@ router.post('/:id/approve', auth, adminOnly, async (req, res) => {
       const { rows: updated } = await client.query(
         `UPDATE person SET ${setClause}, updated_at = now()
          WHERE id = $1 AND family_id = $2 RETURNING id`,
-        [change.person_id, FAMILY_ID, ...keys.map((k) => fields[k])]
+        [change.person_id, currentFamilyId(), ...keys.map((k) => fields[k])]
       );
 
       await client.query(
@@ -159,7 +158,7 @@ router.post('/:id/approve', auth, adminOnly, async (req, res) => {
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'update', entityType: 'person', entityId: result.personId,
       before: result.before, after: { ...result.after, via: 'change_request' },
@@ -179,12 +178,12 @@ router.post('/:id/reject', auth, adminOnly, async (req, res) => {
      SET status = 'rejected', reviewer_user_id = $1, review_note = $2, reviewed_at = now()
      WHERE id = $3 AND family_id = $4 AND status = 'pending'
      RETURNING id, person_id`,
-    [req.user.id, reviewNote, req.params.id, FAMILY_ID]
+    [req.user.id, reviewNote, req.params.id, currentFamilyId()]
   );
   if (!rows.length) return res.status(404).json({ error: '建议不存在或已处理' });
 
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'update', entityType: 'change_request', entityId: req.params.id,
     after: { status: 'rejected', note: reviewNote },

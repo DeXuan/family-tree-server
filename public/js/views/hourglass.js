@@ -59,6 +59,7 @@ export async function renderHourglass(root, id) {
         <a class="btn btn-ghost btn-sm" href="#/person/${esc(id)}">← 返回成员档案</a>
         <div class="spacer"></div>
         <button class="btn btn-sm" type="button" id="hg-export">导出 SVG</button>
+        <button class="btn btn-sm" type="button" id="hg-fan">祖先盘</button>
         <a class="btn btn-sm" href="#/tree">完整世系树</a>
       </div>
 
@@ -118,4 +119,15 @@ export async function renderHourglass(root, id) {
     } catch (err) { toast(err.message, 'error'); }
     btn.disabled = false;
   });
+
+  root.querySelector('#hg-fan').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await download(`/api/tree/ancestors.svg?focus=${encodeURIComponent(id)}&depth=6`, 'ancestors.svg');
+      toast('祖先盘 SVG 已开始下载', 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+    btn.disabled = false;
+  });
+
 }

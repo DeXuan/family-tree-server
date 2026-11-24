@@ -2,12 +2,11 @@ import express from 'express';
 import { query, withTransaction } from '../db/db.js';
 import { auth, adminOnly } from '../middleware/auth.js';
 import { audit } from './audit.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { uuidParam } from '../middleware/params.js';
 import { logger } from '../modules/logger.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 router.param('id', uuidParam);
 
 /** 保存一个版本快照（在更新前调用；事务内） */
@@ -79,7 +78,7 @@ router.post('/:id/versions/:version/restore', auth, adminOnly, async (req, res) 
     const result = await withTransaction(async (client) => {
       const { rows: storyRows } = await client.query(
         'SELECT * FROM story WHERE id = $1 AND family_id = $2 FOR UPDATE',
-        [req.params.id, FAMILY_ID]
+        [req.params.id, currentFamilyId()]
       );
       const story = storyRows[0];
       if (!story) return { error: '故事不存在', status: 404 };
@@ -105,7 +104,7 @@ router.post('/:id/versions/:version/restore', auth, adminOnly, async (req, res) 
       for (const pid of (Array.isArray(v.person_ids) ? v.person_ids : [])) {
         const { rows: exists } = await client.query(
           "SELECT id FROM person WHERE id = $1 AND family_id = $2 AND status = 'active'",
-          [pid, FAMILY_ID]
+          [pid, currentFamilyId()]
         );
         if (exists.length) {
           await client.query(
@@ -120,7 +119,7 @@ router.post('/:id/versions/:version/restore', auth, adminOnly, async (req, res) 
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'update', entityType: 'story', entityId: req.params.id,
       after: { rollbackToVersion: result.version },

@@ -1,3 +1,4 @@
+import { validateOverride, applyOverride, removeOverride, normalizeOverrides } from '../modules/kinshipDialect.js';
 import { logger } from '../modules/logger.js';
 import express from 'express';
 import { randomBytes } from 'crypto';
@@ -12,8 +13,8 @@ import path from 'path';
 import { uuidParam } from '../middleware/params.js';
 import { validateBody } from '../middleware/validateBody.js';
 import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 
-const FAMILY_ID = config.familyId;
 
 const router = express.Router();
 router.param('id', uuidParam);
@@ -136,7 +137,7 @@ router.get('/invitations', auth, adminOnly, async (req, res) => {
      FROM invitation i LEFT JOIN person p ON p.id = i.target_person_id
      WHERE i.family_id = $1
      ORDER BY i.created_at DESC LIMIT 100`,
-    [FAMILY_ID]
+    [currentFamilyId()]
   );
   res.json(rows.map((r) => ({
     ...r,
@@ -177,10 +178,10 @@ router.post('/invitations', auth, adminOnly, async (req, res) => {
     `INSERT INTO invitation (family_id, token, role, target_person_id, max_uses, expires_at, created_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
      RETURNING id, token, role, max_uses, expires_at, status, created_at`,
-    [FAMILY_ID, token, role, targetPersonId, uses, expiresAt, req.user.id]
+    [currentFamilyId(), token, role, targetPersonId, uses, expiresAt, req.user.id]
   );
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'create', entityType: 'invitation', entityId: rows[0].id,
     after: { role, targetPersonId, maxUses: uses, expiresDays: days },
@@ -192,11 +193,11 @@ router.post('/invitations/:id/revoke', auth, adminOnly, async (req, res) => {
   const { rows } = await query(
     `UPDATE invitation SET status = 'revoked'
      WHERE id = $1 AND family_id = $2 RETURNING id, token`,
-    [req.params.id, FAMILY_ID]
+    [req.params.id, currentFamilyId()]
   );
   if (!rows.length) return res.status(404).json({ error: '邀请不存在' });
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'update', entityType: 'invitation', entityId: req.params.id,
     after: { status: 'revoked' },
@@ -209,11 +210,11 @@ router.delete('/invitations/:id', auth, adminOnly, async (req, res) => {
   const { rows } = await query(
     `DELETE FROM invitation WHERE id = $1 AND family_id = $2
      RETURNING token, role, target_person_id, used_count`,
-    [req.params.id, FAMILY_ID]
+    [req.params.id, currentFamilyId()]
   );
   if (!rows.length) return res.status(404).json({ error: '邀请不存在' });
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'delete', entityType: 'invitation', entityId: req.params.id,
     before: rows[0],
@@ -229,7 +230,7 @@ router.post('/backups/prune', auth, adminOnly, async (req, res) => {
   }
   const result = pruneBackups(keep);
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'delete', entityType: 'backup', entityId: null,
     after: { prune: true, keep, deleted: result.deleted },
@@ -243,7 +244,7 @@ router.post('/backup', auth, adminOnly, async (req, res) => {
     const result = await createBackup();
     const pruned = pruneBackups(config.backupKeep);
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'export', entityType: 'backup', entityId: null,
       after: { file: result.file, counts: result.counts, pruned: pruned.deleted },
@@ -268,7 +269,7 @@ router.get('/backups/:file', auth, adminOnly, async (req, res) => {
     const full = backupPath(req.params.file);
     if (!fs.existsSync(full)) return res.status(404).json({ error: '备份文件不存在' });
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'export', entityType: 'backup', entityId: null,
       after: { file: req.params.file, download: true },
@@ -285,7 +286,7 @@ router.delete('/backups/:file', auth, adminOnly, async (req, res) => {
     if (!fs.existsSync(full)) return res.status(404).json({ error: '备份文件不存在' });
     fs.unlinkSync(full);
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'delete', entityType: 'backup', entityId: null,
       before: { file: req.params.file },
@@ -299,7 +300,7 @@ router.delete('/backups/:file', auth, adminOnly, async (req, res) => {
 // 永久清理归档成员（含其关系、事件、媒体文件），不可恢复
 router.post('/purge-archived', auth, adminOnly, async (req, res) => {
   const { rows: archived } = await query(
-    "SELECT id FROM person WHERE family_id = $1 AND status = 'archived'", [FAMILY_ID]
+    "SELECT id FROM person WHERE family_id = $1 AND status = 'archived'", [currentFamilyId()]
   );
   if (!archived.length) {
     return res.json({ deletedPersons: 0, deletedMedia: 0 });
@@ -337,7 +338,7 @@ router.post('/purge-archived', auth, adminOnly, async (req, res) => {
       );
     }
     const deletedPersons = await client.query(
-      "DELETE FROM person WHERE family_id = $1 AND status = 'archived' RETURNING id", [FAMILY_ID]
+      "DELETE FROM person WHERE family_id = $1 AND status = 'archived' RETURNING id", [currentFamilyId()]
     );
     let files = [];
     if (mediaIds.length) {
@@ -358,7 +359,7 @@ router.post('/purge-archived', auth, adminOnly, async (req, res) => {
   }
 
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'delete', entityType: 'person', entityId: null,
     after: { purgeArchived: true, persons: result.deletedPersons, media: result.files.length },
@@ -369,7 +370,7 @@ router.post('/purge-archived', auth, adminOnly, async (req, res) => {
 
 // 家族设置（派语等）
 router.get('/family-settings', auth, async (req, res) => {
-  const { rows } = await query('SELECT name, surname, settings, privacy_policy FROM family WHERE id = $1', [FAMILY_ID]);
+  const { rows } = await query('SELECT name, surname, settings, privacy_policy FROM family WHERE id = $1', [currentFamilyId()]);
   if (!rows.length) return res.status(404).json({ error: '家族不存在' });
   res.json(rows[0]);
 });
@@ -383,7 +384,7 @@ router.put('/family-settings', auth, adminOnly, async (req, res) => {
   });
   if (check.error) return res.status(400).json({ error: check.error });
 
-  const { rows: before } = await query('SELECT settings FROM family WHERE id = $1', [FAMILY_ID]);
+  const { rows: before } = await query('SELECT settings FROM family WHERE id = $1', [currentFamilyId()]);
   if (!before.length) return res.status(404).json({ error: '家族不存在' });
 
   const settings = { ...(before[0].settings || {}) };
@@ -402,16 +403,78 @@ router.put('/family-settings', auth, adminOnly, async (req, res) => {
     : '';
   await query(
     `UPDATE family SET ${setClause}settings = $1, updated_at = now() WHERE id = $2`,
-    [JSON.stringify(settings), FAMILY_ID, ...keys.map((k) => fields[k])]
+    [JSON.stringify(settings), currentFamilyId(), ...keys.map((k) => fields[k])]
   );
 
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
-    action: 'update', entityType: 'family', entityId: FAMILY_ID,
+    action: 'update', entityType: 'family', entityId: currentFamilyId(),
     before: { settings: before[0].settings }, after: { settings },
   });
   res.json({ ok: true, settings });
+
+// ---------------------------------------------------------------------------
+// 方言自定义词条（家族级覆盖）
+// ---------------------------------------------------------------------------
+
+/** GET /api/admin/dialect-overrides —— 当前自定义词条 */
+router.get('/dialect-overrides', auth, async (req, res) => {
+  const { rows } = await query('SELECT settings FROM family WHERE id = $1', [currentFamilyId()]);
+  if (!rows.length) return res.status(404).json({ error: '家族不存在' });
+  const overrides = normalizeOverrides(rows[0].settings?.dialectOverrides || {});
+  res.json({ overrides, max: 60, maxTermLen: 10 });
+});
+
+/** PUT /api/admin/dialect-overrides —— 新增/覆盖一条词条 */
+router.put('/dialect-overrides', auth, adminOnly, async (req, res) => {
+  const check = validateOverride(req.body || {});
+  if (!check.ok) return res.status(400).json({ error: check.error });
+
+  const { rows: before } = await query('SELECT settings FROM family WHERE id = $1', [currentFamilyId()]);
+  if (!before.length) return res.status(404).json({ error: '家族不存在' });
+  const current = normalizeOverrides(before[0].settings?.dialectOverrides || {});
+  const applied = applyOverride(current, check.override);
+  if (!applied.ok) return res.status(400).json({ error: applied.error });
+
+  await query(
+    `UPDATE family SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb),
+       '{dialectOverrides}', $1::jsonb, true), updated_at = now() WHERE id = $2`,
+    [JSON.stringify(applied.overrides), currentFamilyId()]
+  );
+  await audit({
+    familyId: currentFamilyId(),
+    actorUserId: req.user.id, actorLabel: req.user.username,
+    action: 'update', entityType: 'family', entityId: currentFamilyId(),
+    before: { dialectOverrides: current }, after: { dialectOverrides: applied.overrides },
+  });
+  res.json({ ok: true, overrides: applied.overrides });
+});
+
+/** DELETE /api/admin/dialect-overrides —— 删除一条词条（query: dialect & standard） */
+router.delete('/dialect-overrides', auth, adminOnly, async (req, res) => {
+  const dialect = String(req.query.dialect || '');
+  const standard = String(req.query.standard || '');
+  const { rows: before } = await query('SELECT settings FROM family WHERE id = $1', [currentFamilyId()]);
+  if (!before.length) return res.status(404).json({ error: '家族不存在' });
+  const current = normalizeOverrides(before[0].settings?.dialectOverrides || {});
+  const removed = removeOverride(current, { dialect, standard });
+  if (!removed.ok) return res.status(404).json({ error: removed.error });
+
+  await query(
+    `UPDATE family SET settings = jsonb_set(COALESCE(settings, '{}'::jsonb),
+       '{dialectOverrides}', $1::jsonb, true), updated_at = now() WHERE id = $2`,
+    [JSON.stringify(removed.overrides), currentFamilyId()]
+  );
+  await audit({
+    familyId: currentFamilyId(),
+    actorUserId: req.user.id, actorLabel: req.user.username,
+    action: 'delete', entityType: 'family', entityId: currentFamilyId(),
+    before: { removed: { dialect, standard } }, after: { dialectOverrides: removed.overrides },
+  });
+  res.json({ ok: true, overrides: removed.overrides });
+});
+
 });
 
 // 审计日志查询

@@ -164,7 +164,7 @@ export function parseNarrative(text) {
       } else if (kin.type === 'spouse') {
         if (subjectName) addRelation(draft, { kind: 'spouse', from: subjectName, to: other.name });
       } else {
-        draft.warnings.push(`「${raw}」：${m1.groups.kin}需要先有中间一代（父/母），已建人物，请手动补关系`);
+        draft.warnings.push('「' + raw + '」：' + m1.groups.kin + '需要先有中间一代，已建人物，请手动补关系');
       }
       applyFacts(other, facts);
       lastPerson = other;
@@ -179,6 +179,7 @@ export function parseNarrative(text) {
       const subject = getPerson(draft, m2.groups.subject);
       const anchorName = resolveSubject(m2.groups.anchor, draft, lastPerson);
       const kin = KIN[m2.groups.kin];
+      const kinName = m2.groups.kin;
       if (kin.type === 'parent') {
         setGender(subject, kin.side === 'father' ? 'male' : 'female');
         if (anchorName) addRelation(draft, { kind: 'parent', from: subject.name, to: anchorName, role: kin.side });
@@ -187,6 +188,36 @@ export function parseNarrative(text) {
         if (anchorName) addRelation(draft, { kind: 'parent', from: anchorName, to: subject.name, role: 'unknown' });
       } else if (kin.type === 'spouse') {
         if (anchorName) addRelation(draft, { kind: 'spouse', from: anchorName, to: subject.name });
+      } else if (kin.type === 'grandparent') {
+        // 祖辈：自动补一个中间一代（父/母），并标记待补姓名
+        if (anchorName) {
+          const midName = (kin.side === 'paternal' ? '父' : '母') + '亲（待补）';
+          const mid = getPerson(draft, midName);
+          mid.isPlaceholder = true;
+          mid.note = '由「' + kinName + '」推导出的中间一代，请补填姓名';
+          if (!mid.gender) setGender(mid, kin.side === 'paternal' ? 'male' : 'female');
+          addRelation(draft, { kind: 'parent', from: subject.name, to: midName, role: kin.side === 'paternal' ? 'father' : 'mother' });
+          addRelation(draft, { kind: 'parent', from: midName, to: anchorName, role: kin.side === 'paternal' ? 'father' : 'mother' });
+          draft.warnings.push('「' + raw + '」：已为' + kinName + '自动补中间一代「' + midName + '」，请补填其姓名');
+        }
+      } else if (kin.type === 'sibling') {
+        // 兄弟姐妹：挂到 anchor 的父/母下（无父母则建占位父母）
+        if (anchorName) {
+          const parents = draft.relations.filter((r) => r.kind === 'parent' && r.to === anchorName);
+          if (parents.length) {
+            for (const rel of parents) {
+              addRelation(draft, { kind: 'parent', from: rel.from, to: subject.name, role: rel.role });
+            }
+          } else {
+            const parentName = '父母（待补）';
+            const ph = getPerson(draft, parentName);
+            ph.isPlaceholder = true;
+            ph.note = '由兄弟姐妹关系推导，请补填父母姓名';
+            addRelation(draft, { kind: 'parent', from: parentName, to: anchorName, role: 'unknown' });
+            addRelation(draft, { kind: 'parent', from: parentName, to: subject.name, role: 'unknown' });
+            draft.warnings.push('「' + raw + '」：兄弟姐妹需要共同父母，已建占位「' + parentName + '」，请补填');
+          }
+        }
       } else {
         draft.warnings.push(`「${raw}」：${m2.groups.kin}需要先有中间一代，已建人物，请手动补关系`);
       }

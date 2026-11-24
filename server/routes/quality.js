@@ -2,13 +2,12 @@ import express from 'express';
 import { query, withTransaction } from '../db/db.js';
 import { auth, editorUp } from '../middleware/auth.js';
 import { audit } from './audit.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { auditCompleteness, matchesFilter } from '../modules/completeness.js';
 import { validatePersonInput } from '../middleware/validation.js';
 import { logger } from '../modules/logger.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 
 /** 一次性把上下文需要的集合查出来（避免 N+1） */
 async function loadContext() {
@@ -17,27 +16,27 @@ async function loadContext() {
       `SELECT id, family_name, given_name, gender, birth_date, birth_place, generation_no,
               generation_name, bio, is_deceased, branch, status
        FROM person WHERE family_id = $1 AND status = 'active'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     ),
     query(
       `SELECT pc.parent_id, pc.child_id FROM parent_child pc
        JOIN person p ON p.id = pc.child_id WHERE p.family_id = $1 AND p.status = 'active'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     ),
     query(
       `SELECT e.person_id FROM event e JOIN person p ON p.id = e.person_id
        WHERE p.family_id = $1 AND p.status = 'active'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     ),
     query(
       `SELECT c.target_id FROM citation c JOIN person p ON p.id = c.target_id
        WHERE p.family_id = $1 AND p.status = 'active' AND c.target_type = 'person'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     ),
     query(
       `SELECT ml.target_id FROM media_link ml JOIN person p ON p.id = ml.target_id
        WHERE p.family_id = $1 AND p.status = 'active' AND ml.target_type = 'person'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     ),
   ]);
 
@@ -140,7 +139,7 @@ router.post('/bulk-update', auth, editorUp, async (req, res) => {
       const { rows: before } = await client.query(
         `SELECT id, family_name, given_name, branch, generation_no, generation_name
          FROM person WHERE id = ANY($1) AND family_id = $2 AND status = 'active'`,
-        [personIds, FAMILY_ID]
+        [personIds, currentFamilyId()]
       );
       if (!before.length) return { updated: 0, before: [] };
 
@@ -149,13 +148,13 @@ router.post('/bulk-update', auth, editorUp, async (req, res) => {
       await client.query(
         `UPDATE person SET ${setClause}, updated_at = now()
          WHERE id = ANY($1) AND family_id = $2 AND status = 'active'`,
-        [personIds, FAMILY_ID, ...keys.map((k) => fields[k])]
+        [personIds, currentFamilyId(), ...keys.map((k) => fields[k])]
       );
       return { updated: before.length, before };
     });
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'update', entityType: 'person', entityId: null,
       before: result.before, after: { bulk: true, set: fields, count: result.updated },

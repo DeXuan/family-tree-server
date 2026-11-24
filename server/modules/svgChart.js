@@ -355,3 +355,122 @@ export function buildHourglassSvg({
   </g>
 </svg>`;
 }
+
+/**
+ * 祖先盘（扇形/同心环）：中心是本人，向外每环一代；父系在左半、母系在右半。
+ * 参考 Topola Ancestors（扇形）的布局，用 Ahnentafel 位置推导扇区：
+ *   - 1 = 本人（圆心）
+ *   - 2n = 父，2n+1 = 母（n 为子节点位置）
+ * 第 d 代的扇区数 = 2^d，扇区角度 = PI / 2^d（总角度 PI，左右各半）。
+ *
+ * @param {object} opts
+ * @param {object} opts.focus 中心成员
+ * @param {Array}  opts.ancestors [{distance, person}]
+ * @param {string} opts.title
+ * @returns {string} SVG
+ */
+export function buildAncestorFanSvg({ focus, ancestors = [], title = '祖先盘' }) {
+  if (!focus || !focus.id) {
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120"><text x="20" y="60">暂无成员</text></svg>';
+  }
+
+  const maxDepth = Math.min(6, Math.max(0, ancestors.reduce((m, a) => Math.max(m, a.distance), 0)));
+  const RING_W = 108;
+  const CORE_R = 62;
+  const R0 = CORE_R;
+  const outer = R0 + maxDepth * RING_W;
+  const size = outer * 2 + 60;
+  const cx = size / 2;
+  const cy = size / 2;
+
+  // 按代数分桶，同代内按父/母侧排序
+  const byDepth = new Map();
+  for (const a of ancestors) {
+    if (a.distance < 1 || a.distance > maxDepth) continue;
+    if (!byDepth.has(a.distance)) byDepth.set(a.distance, []);
+    byDepth.get(a.distance).push(a);
+  }
+
+  const halves = [];  // 每个扇区: {a0,a1,r0,r1,person,side}
+  for (let d = 1; d <= maxDepth; d++) {
+    const list = (byDepth.get(d) || []).slice().sort((x, y) => {
+      const sx = x.relation === '母' ? 1 : 0;
+      const sy = y.relation === '母' ? 1 : 0;
+      return sx - sy || (x.person.birth_year || 9999) - (y.person.birth_year || 9999);
+    });
+    if (!list.length) continue;
+    const slots = Math.pow(2, d);
+    const step = Math.PI / slots;      // 单侧总角 = PI
+    const r0 = R0 + (d - 1) * RING_W;
+    const r1 = r0 + RING_W;
+    list.forEach((a, i) => {
+      // 父系从正中偏左开始向左侧铺开，母系从正中偏右向右侧铺开
+      const idx = Math.min(i, slots - 1);
+      const isMother = a.relation === '母';
+      const k = isMother ? Math.floor(idx / 2) : Math.floor(idx / 2);
+      const start = isMother
+        ? -Math.PI / 2 + k * step    // 右半：从 -90° 顺时针展开
+        : -Math.PI / 2 - (k + 1) * step; // 左半
+      const a0 = start;
+      const a1 = start + step;
+      halves.push({ a0, a1, r0, r1, person: a.person, side: isMother ? 'M' : 'F', distance: d });
+    });
+  }
+
+  const arc = (r0, r1, a0, a1) => {
+    const p = (r, ang) => [cx + r * Math.cos(ang), cy + r * Math.sin(ang)];
+    const [x0, y0] = p(r0, a0);
+    const [x1, y1] = p(r0, a1);
+    const [x2, y2] = p(r1, a1);
+    const [x3, y3] = p(r1, a0);
+    const large = a1 - a0 > Math.PI ? 1 : 0;
+    return `M${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y1.toFixed(1)} `
+      + `A${r0},${r0} 0 ${large} 0 ${x2.toFixed(1)},${y2.toFixed(1)} `
+      + `L${x3.toFixed(1)},${y3.toFixed(1)} A${r1},${r1} 0 ${large} 1 ${x0.toFixed(1)},${y0.toFixed(1)} Z`;
+  };
+
+  const wedges = halves.map((h) => {
+    const mid = (h.a0 + h.a1) / 2;
+    const labelR = (h.r0 + h.r1) / 2;
+    const lx = cx + labelR * Math.cos(mid);
+    const ly = cy + labelR * Math.sin(mid);
+    const name = `${h.person.family_name || ''}${h.person.given_name || ''}`;
+    const short = name.length > 6 ? name.slice(0, 6) : name;
+    const fill = h.side === 'M' ? '#f6ece9' : '#eef4f0';
+    const stroke = h.side === 'M' ? '#d8bdb5' : '#bdd0c4';
+    const rotate = (mid * 180) / Math.PI;
+    // 扇区较窄时文字沿半径排布
+    const narrow = h.a1 - h.a0 < 0.35;
+    return `
+      <g>
+        <path d="${arc(h.r0, h.r1, h.a0, h.a1)}" fill="${fill}" stroke="${stroke}" stroke-width="1"/>
+        <text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle"
+          font-family="Songti SC, SimSun, serif" font-size="${narrow ? 9 : 11}" fill="#24211c"
+          ${narrow ? `transform="rotate(${rotate.toFixed(1)} ${lx.toFixed(1)} ${ly.toFixed(1)})"` : ''}>${esc(short)}</text>
+      </g>`;
+  });
+
+  const focusName = `${focus.family_name || ''}${focus.given_name || ''}`;
+  const genCount = maxDepth;
+  const today = new Date().toISOString().slice(0, 10);
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(size)}" height="${Math.round(size + 56)}"
+  viewBox="0 0 ${Math.round(size)} ${Math.round(size + 56)}">
+  <rect width="100%" height="100%" fill="#f6f3ec"/>
+  <text x="${Math.round(size / 2)}" y="30" text-anchor="middle"
+    font-family="Songti SC, SimSun, serif" font-size="20" fill="#24211c">${esc(title)}</text>
+  <text x="${Math.round(size / 2)}" y="48" text-anchor="middle"
+    font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="10" fill="#8b8377">
+    上溯 ${genCount} 代 · 左为父系 · 右为母系 · 生成于 ${today}
+  </text>
+  <g transform="translate(0, 56)">
+    ${wedges.join('\n    ')}
+    <circle cx="${cx}" cy="${cy}" r="${CORE_R}" fill="#fff9ec" stroke="#8c6d3f" stroke-width="2.4"/>
+    <text x="${cx}" y="${cy - 4}" text-anchor="middle" dominant-baseline="middle"
+      font-family="Songti SC, SimSun, serif" font-size="14" fill="#24211c">${esc(focusName)}</text>
+    <text x="${cx}" y="${cy + 16}" text-anchor="middle" dominant-baseline="middle"
+      font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="9" fill="#8b8377">本人</text>
+  </g>
+</svg>`;
+}

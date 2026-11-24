@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="34" fill="#9c3d2e"/>
+  <circle cx="96" cy="96" r="72" fill="none" stroke="#fffdf8" stroke-width="3" opacity="0.5"/>
+  <text x="96" y="128" font-size="96" text-anchor="middle" fill="#fffdf8"
+        font-family="Songti SC, SimSun, serif">祖</text>
+</svg>

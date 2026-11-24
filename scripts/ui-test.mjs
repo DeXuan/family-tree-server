@@ -592,6 +592,11 @@ try {
     `UI收藏地${collabTag}`, { timeout: 10000 },
   );
   pass('收藏地可删除');
+  // 收藏地增删会触发整页刷新，等来源行出现再断言
+  await page.waitForFunction(
+    (t) => document.querySelector('#admin-panel')?.textContent.includes(t),
+    sourceTitle, { timeout: 12000 },
+  );
   const sourcesText = await page.textContent('#admin-panel');
   sourcesText.includes(sourceTitle) ? pass('来源库展示已创建来源') : fail('来源库缺少测试来源');
   const sourceDel = page.locator('tr', { hasText: sourceTitle }).locator('[data-source-del]');

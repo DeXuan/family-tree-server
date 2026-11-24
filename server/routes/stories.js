@@ -2,7 +2,7 @@ import express from 'express';
 import { query, withTransaction } from '../db/db.js';
 import { auth, editorUp, adminOnly } from '../middleware/auth.js';
 import { audit } from './audit.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { uuidParam } from '../middleware/params.js';
 import { renderStoryMarkdown, storyExcerpt } from '../modules/storyMarkdown.js';
 import { logger } from '../modules/logger.js';
@@ -10,7 +10,6 @@ import { validateBody } from '../middleware/validateBody.js';
 import { snapshotStory } from './storyVersions.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 router.param('id', uuidParam);
 
 const RANK = { L0: 0, L1: 1, L2: 2 };
@@ -51,7 +50,7 @@ async function loadLinked(storyIds) {
 // 列表
 router.get('/', auth, async (req, res) => {
   const keyword = String(req.query.keyword || '').trim();
-  const params = [FAMILY_ID];
+  const params = [currentFamilyId()];
   let where = 'family_id = $1';
   if (keyword) {
     params.push(`%${keyword}%`);
@@ -91,7 +90,7 @@ router.get('/person/:personId', auth, async (req, res) => {
      FROM story s JOIN story_person sp ON sp.story_id = s.id
      WHERE s.family_id = $1 AND sp.person_id = $2
      ORDER BY COALESCE(s.story_date, s.created_at::date) DESC`,
-    [FAMILY_ID, req.params.personId]
+    [currentFamilyId(), req.params.personId]
   );
   const maxRank = viewerRank(req);
   res.json(rows
@@ -110,7 +109,7 @@ router.get('/person/:personId', auth, async (req, res) => {
 // 详情（含渲染后的 HTML）
 router.get('/:id', auth, async (req, res) => {
   const { rows } = await query(
-    'SELECT * FROM story WHERE id = $1 AND family_id = $2', [req.params.id, FAMILY_ID]
+    'SELECT * FROM story WHERE id = $1 AND family_id = $2', [req.params.id, currentFamilyId()]
   );
   if (!rows.length) return res.status(404).json({ error: '故事不存在' });
   const story = rows[0];
@@ -125,7 +124,7 @@ router.get('/:id', auth, async (req, res) => {
   if (mediaIds.length) {
     const { rows: mediaRows } = await query(
       `SELECT id, visibility FROM media WHERE id = ANY($1) AND family_id = $2`,
-      [mediaIds, FAMILY_ID]
+      [mediaIds, currentFamilyId()]
     );
     const rank = viewerRank(req);
     allowedMedia = new Set(
@@ -170,7 +169,7 @@ async function syncPersons(client, storyId, personIds = [], role = 'subject') {
   for (const pid of uniq) {
     const { rows } = await client.query(
       "SELECT id FROM person WHERE id = $1 AND family_id = $2 AND status = 'active'",
-      [pid, FAMILY_ID]
+      [pid, currentFamilyId()]
     );
     if (!rows.length) continue;
     await client.query(
@@ -197,7 +196,7 @@ router.post('/', auth, editorUp, async (req, res) => {
       const { rows } = await client.query(
         `INSERT INTO story (family_id, title, body, author_name, story_date, date_precision, visibility, created_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-        [FAMILY_ID, String(b.title).trim(), String(b.body || ''), String(b.authorName || ''),
+        [currentFamilyId(), String(b.title).trim(), String(b.body || ''), String(b.authorName || ''),
           parseDate(b.date) ?? null, b.precision || 'unknown', visibility, req.user.id]
       );
       const id = rows[0].id;
@@ -206,7 +205,7 @@ router.post('/', auth, editorUp, async (req, res) => {
     });
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'create', entityType: 'story', entityId: created,
       after: { title: b.title, visibility, persons: (b.personIds || []).length },
@@ -225,7 +224,7 @@ router.put('/:id', auth, editorUp, async (req, res) => {
   if (v.error) return res.status(400).json({ error: v.error });
 
   const { rows: beforeRows } = await query(
-    'SELECT * FROM story WHERE id = $1 AND family_id = $2', [req.params.id, FAMILY_ID]
+    'SELECT * FROM story WHERE id = $1 AND family_id = $2', [req.params.id, currentFamilyId()]
   );
   if (!beforeRows.length) return res.status(404).json({ error: '故事不存在' });
   const before = beforeRows[0];
@@ -255,7 +254,7 @@ router.put('/:id', auth, editorUp, async (req, res) => {
         const setClause = keys.map((k, i) => `${k} = $${i + 3}`).join(', ');
         await client.query(
           `UPDATE story SET ${setClause}, updated_at = now() WHERE id = $1 AND family_id = $2`,
-          [req.params.id, FAMILY_ID, ...keys.map((k) => fields[k])]
+          [req.params.id, currentFamilyId(), ...keys.map((k) => fields[k])]
         );
       } else {
         await client.query('UPDATE story SET updated_at = now() WHERE id = $1', [req.params.id]);
@@ -266,7 +265,7 @@ router.put('/:id', auth, editorUp, async (req, res) => {
     });
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'update', entityType: 'story', entityId: req.params.id,
       before, after: { ...fields, personIds: b.personIds },
@@ -281,11 +280,11 @@ router.put('/:id', auth, editorUp, async (req, res) => {
 // 删除
 router.delete('/:id', auth, adminOnly, async (req, res) => {
   const { rows } = await query(
-    'DELETE FROM story WHERE id = $1 AND family_id = $2 RETURNING title', [req.params.id, FAMILY_ID]
+    'DELETE FROM story WHERE id = $1 AND family_id = $2 RETURNING title', [req.params.id, currentFamilyId()]
   );
   if (!rows.length) return res.status(404).json({ error: '故事不存在' });
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'delete', entityType: 'story', entityId: req.params.id,
     before: { title: rows[0].title },

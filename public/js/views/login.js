@@ -67,6 +67,11 @@ export function renderLogin(root) {
         return;
       }
       session.set(data.token, data.user);
+      // 多家族：记住可访问家族，首个作为默认当前家族
+      if (data.families?.length) {
+        session.setFamilies(data.families);
+        session.setFamilyId(data.families[0].id);
+      }
       if (location.hash === '#/login' || !location.hash) location.hash = '#/';
       else location.reload();
     } catch (err) {
@@ -92,6 +97,11 @@ export function renderLogin(root) {
         body: { challengeToken, code: twofaForm.code.value.trim() },
       });
       session.set(data.token, data.user);
+      // 多家族：记住可访问家族，首个作为默认当前家族
+      if (data.families?.length) {
+        session.setFamilies(data.families);
+        session.setFamilyId(data.families[0].id);
+      }
       location.hash = '#/';
     } catch (err) {
       twofaErr.hidden = false;

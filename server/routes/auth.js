@@ -1,3 +1,4 @@
+import { familiesOfUser } from '../middleware/tenant.js';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
@@ -20,8 +21,9 @@ const MAX_FAILED = 5;
 const LOCK_MINUTES = 15;
 
 function signToken(user) {
+  // token 里带上「默认家族」，作为 X-Family-Id 缺省时的回退
   return jwt.sign(
-    { sub: user.id, role: user.role, ver: user.token_version || 0 },
+    { sub: user.id, role: user.role, ver: user.token_version || 0, familyId: user.familyId || config.familyId },
     config.jwtSecret,
     { expiresIn: '7d' }
   );
@@ -79,6 +81,8 @@ router.post('/login', async (req, res) => {
 
     res.json({
       token: signToken(user),
+      // 多家族：把可访问的家族随登录一起下发，前端据此渲染切换器
+      families: await familiesOfUser(user.id),
       user: { id: user.id, username: user.username, role: user.role, personId: user.person_id },
     });
   } catch (err) {
@@ -145,6 +149,7 @@ router.post('/login/2fa', async (req, res) => {
 
     res.json({
       token: signToken(user),
+      families: await familiesOfUser(user.id),
       user: { id: user.id, username: user.username, role: user.role, personId: user.person_id },
       recoveryRemaining: remaining ? remaining.length : undefined,
     });

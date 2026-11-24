@@ -44,10 +44,19 @@ test('婚姻句式：A 和 B 结婚', () => {
   assert.deepEqual([rel.from, rel.to].sort(), ['周静', '王小明'].sort());
 });
 
-test('无法确定的祖辈只建人物并给出 warning', () => {
-  const d = parseNarrative('我爷爷是王守仁。');
-  assert.ok(d.persons.some((p) => p.name === '王守仁'));
+test('祖辈关系自动补中间一代并给出 warning', () => {
+  const d = parseNarrative('王小明是王德明的爷爷。');
+  assert.ok(d.persons.some((p) => p.name === '王小明'));
+  // 自动补一个占位父/母，串起跨代关系
+  assert.ok(d.persons.some((p) => p.isPlaceholder), '应有占位中间代');
   assert.ok(d.warnings.some((w) => w.includes('中间一代')));
+  assert.ok(d.relations.length >= 2, '应至少有两条亲子关系');
+});
+
+test('兄弟姐妹自动补共同父母', () => {
+  const d = parseNarrative('王小刚是王德明的弟弟。');
+  assert.ok(d.persons.some((p) => p.name === '王小刚'));
+  assert.ok(d.warnings.some((w) => w.includes('共同父母')));
 });
 
 test('出生地抽取', () => {

@@ -2,12 +2,11 @@ import express from 'express';
 import { query } from '../db/db.js';
 import { auth, editorUp, adminOnly } from '../middleware/auth.js';
 import { audit } from './audit.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { uuidParam } from '../middleware/params.js';
 import { validateBody } from '../middleware/validateBody.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 router.param('id', uuidParam);
 
 // 收藏地列表（含被来源引用数）
@@ -18,7 +17,7 @@ router.get('/', auth, async (req, res) => {
      FROM repository r
      WHERE r.family_id = $1
      ORDER BY r.name`,
-    [FAMILY_ID]
+    [currentFamilyId()]
   );
   res.json(rows.map((r) => ({ ...r, sourceCount: r.source_count })));
 });
@@ -35,11 +34,11 @@ router.post('/', auth, editorUp, async (req, res) => {
   const { rows } = await query(
     `INSERT INTO repository (family_id, name, address, contact, note, created_by)
      VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [FAMILY_ID, b.name.trim(), (b.address || '').trim(), (b.contact || '').trim(),
+    [currentFamilyId(), b.name.trim(), (b.address || '').trim(), (b.contact || '').trim(),
       (b.note || '').trim(), req.user.id]
   );
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'create', entityType: 'repository', entityId: rows[0].id,
     after: { name: rows[0].name },
@@ -62,7 +61,7 @@ router.put('/:id', auth, editorUp, async (req, res) => {
   if (!keys.length) return res.status(400).json({ error: '没有要更新的字段' });
 
   const { rows: beforeRows } = await query(
-    'SELECT * FROM repository WHERE id = $1 AND family_id = $2', [req.params.id, FAMILY_ID]
+    'SELECT * FROM repository WHERE id = $1 AND family_id = $2', [req.params.id, currentFamilyId()]
   );
   if (!beforeRows.length) return res.status(404).json({ error: '收藏地不存在' });
 
@@ -70,10 +69,10 @@ router.put('/:id', auth, editorUp, async (req, res) => {
   const { rows } = await query(
     `UPDATE repository SET ${setClause}, updated_at = now()
      WHERE id = $1 AND family_id = $2 RETURNING *`,
-    [req.params.id, FAMILY_ID, ...keys.map((k) => fields[k])]
+    [req.params.id, currentFamilyId(), ...keys.map((k) => fields[k])]
   );
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'update', entityType: 'repository', entityId: req.params.id,
     before: beforeRows[0], after: fields,
@@ -94,11 +93,11 @@ router.delete('/:id', auth, adminOnly, async (req, res) => {
   }
   const { rows } = await query(
     'DELETE FROM repository WHERE id = $1 AND family_id = $2 RETURNING name',
-    [req.params.id, FAMILY_ID]
+    [req.params.id, currentFamilyId()]
   );
   if (!rows.length) return res.status(404).json({ error: '收藏地不存在' });
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'delete', entityType: 'repository', entityId: req.params.id,
     before: { name: rows[0].name, unlinkedSources: used[0].c },

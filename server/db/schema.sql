@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS family (
 -- ---------- 成员（与 User 分离） ----------
 CREATE TABLE IF NOT EXISTS person (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  family_id       UUID NOT NULL REFERENCES family(id),
+  family_id       UUID NOT NULL REFERENCES family(id) ON DELETE CASCADE,
   family_name     TEXT NOT NULL DEFAULT '',   -- 姓
   given_name      TEXT NOT NULL DEFAULT '',   -- 名
   former_names    JSONB NOT NULL DEFAULT '[]'::jsonb,   -- 曾用名数组
@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS user_family_role (
 -- ---------- 审计日志（只追加，记 before/after） ----------
 CREATE TABLE IF NOT EXISTS audit_log (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  family_id   UUID REFERENCES family(id),
+  family_id   UUID REFERENCES family(id) ON DELETE CASCADE,
   actor_user_id UUID,
   actor_label TEXT NOT NULL DEFAULT '',          -- 操作者名快照（用户删除后仍可读）
   action      TEXT NOT NULL,                     -- create/update/delete/login/export…
@@ -409,3 +409,63 @@ CREATE INDEX IF NOT EXISTS idx_repository_family ON repository(family_id, name);
 ALTER TABLE source ADD COLUMN IF NOT EXISTS repository_id UUID
   REFERENCES repository(id) ON DELETE SET NULL;   
 CREATE INDEX IF NOT EXISTS idx_source_repository ON source(repository_id);
+
+-- =====================================================================
+-- 自定义关联角色：放宽 role 的 CHECK 约束
+-- 内置 11 种角色保持原样，另允许 custom_ 前缀的家族自定义角色。
+-- 注意：约束名由 PostgreSQL 自动生成，需按实际名字删除；用 DO 块兼容 PGlite。
+-- =====================================================================
+ALTER TABLE association DROP CONSTRAINT IF EXISTS association_role_check;
+-- 幂等：只在没有 association_role_format 时才添加（ADD CONSTRAINT 本身不支持 IF NOT EXISTS）
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'association'::regclass AND conname = 'association_role_format'
+  ) THEN
+    ALTER TABLE association ADD CONSTRAINT association_role_format
+      CHECK (role IN ('godparent','godchild','witness','employer','employee',
+                      'neighbor','friend','teacher','student','successor','other')
+             OR role LIKE 'custom\_%');
+  END IF;
+END $$;
+
+-- 多家族：person 的 family_id 必须级联删除（早期建库遗漏了 ON DELETE CASCADE）
+-- 幂等：先查出约束名，不是 CASCADE 就重建
+DO $$
+DECLARE
+  cname TEXT;
+BEGIN
+  SELECT conname INTO cname
+  FROM pg_constraint
+  WHERE conrelid = 'person'::regclass
+    AND contype = 'f'
+    AND confrelid = 'family'::regclass;
+  IF cname IS NOT NULL THEN
+    -- 只有未级联时才重建（用 confdeltype 判断：'c' = CASCADE）
+    IF (SELECT confdeltype FROM pg_constraint WHERE conname = cname AND conrelid = 'person'::regclass) <> 'c' THEN
+      EXECUTE format('ALTER TABLE person DROP CONSTRAINT %I', cname);
+      ALTER TABLE person ADD CONSTRAINT person_family_id_fkey
+        FOREIGN KEY (family_id) REFERENCES family(id) ON DELETE CASCADE;
+    END IF;
+  END IF;
+END $$;
+
+-- 多家族：audit_log.family_id 也需级联（早期建库遗漏）
+DO $$
+DECLARE
+  cname TEXT;
+BEGIN
+  SELECT conname INTO cname
+  FROM pg_constraint
+  WHERE conrelid = 'audit_log'::regclass
+    AND contype = 'f'
+    AND confrelid = 'family'::regclass;
+  IF cname IS NOT NULL THEN
+    IF (SELECT confdeltype FROM pg_constraint WHERE conname = cname AND conrelid = 'audit_log'::regclass) <> 'c' THEN
+      EXECUTE format('ALTER TABLE audit_log DROP CONSTRAINT %I', cname);
+      ALTER TABLE audit_log ADD CONSTRAINT audit_log_family_id_fkey
+        FOREIGN KEY (family_id) REFERENCES family(id) ON DELETE CASCADE;
+    END IF;
+  END IF;
+END $$;

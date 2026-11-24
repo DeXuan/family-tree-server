@@ -19,6 +19,8 @@ export function withBase(path) {
 
 const TOKEN_KEY = 'ft_token';
 const USER_KEY = 'ft_user';
+const FAMILY_KEY = 'ft_family_id';
+const FAMILIES_KEY = 'ft_families';
 
 export const session = {
   get token() { return localStorage.getItem(TOKEN_KEY) || ''; },
@@ -29,9 +31,24 @@ export const session = {
     if (token) localStorage.setItem(TOKEN_KEY, token);
     if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
   },
+  // 多家族：当前家族 ID 与可访问列表
+  get familyId() { return localStorage.getItem(FAMILY_KEY) || ''; },
+  setFamilyId(id) {
+    if (id) localStorage.setItem(FAMILY_KEY, id);
+    else localStorage.removeItem(FAMILY_KEY);
+  },
+  get families() {
+    try { return JSON.parse(localStorage.getItem(FAMILIES_KEY) || '[]'); } catch { return []; }
+  },
+  setFamilies(list) {
+    localStorage.setItem(FAMILIES_KEY, JSON.stringify(list || []));
+  },
+  get isMultiFamily() { return this.families.length > 1; },
   clear() {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(FAMILY_KEY);
+    localStorage.removeItem(FAMILIES_KEY);
   },
   get isAdmin() { return this.user?.role === 'admin'; },
   get canEdit() { return ['admin', 'editor'].includes(this.user?.role); },
@@ -44,6 +61,7 @@ export class ApiError extends Error {
 export async function api(path, { method = 'GET', body, form, raw = false } = {}) {
   const headers = {};
   if (session.token) headers.Authorization = `Bearer ${session.token}`;
+  if (session.familyId) headers['X-Family-Id'] = session.familyId;
   if (body && !form) headers['Content-Type'] = 'application/json';
 
   const res = await fetch(withBase(path), {

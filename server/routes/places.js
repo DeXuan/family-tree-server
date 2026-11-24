@@ -4,11 +4,11 @@ import { query } from '../db/db.js';
 import { auth, adminOnly } from '../middleware/auth.js';
 import { audit } from './audit.js';
 import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { uuidParam } from '../middleware/params.js';
 import { validateBody } from '../middleware/validateBody.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 router.param('id', uuidParam);
 
 const bad = (res, msg) => res.status(400).json({ error: msg });
@@ -29,7 +29,7 @@ async function loadPeoplePlaces() {
   const { rows } = await query(
     `SELECT id, family_name, given_name, birth_place, death_place, burial_place
      FROM person WHERE family_id = $1 AND status = 'active'`,
-    [FAMILY_ID]
+    [currentFamilyId()]
   );
   return rows;
 }
@@ -37,7 +37,7 @@ async function loadPeoplePlaces() {
 async function loadPlaces() {
   const { rows } = await query(
     `SELECT * FROM place WHERE family_id = $1 ORDER BY province, city, name`,
-    [FAMILY_ID]
+    [currentFamilyId()]
   );
   return rows;
 }
@@ -103,7 +103,7 @@ router.get('/map', auth, async (req, res) => {
               p.family_name, p.given_name, p.birth_place
        FROM event e JOIN person p ON p.id = e.person_id
        WHERE p.family_id = $1 AND p.status = 'active' AND e.event_type = 'migration'`,
-      [FAMILY_ID]
+      [currentFamilyId()]
     ),
   ]);
 
@@ -126,6 +126,12 @@ router.get('/map', auth, async (req, res) => {
   const lats = withCoords.map((p) => p.lat);
   const lngs = withCoords.map((p) => p.lng);
   res.json({
+    // 可选底图：留空表示纯离线自绘；有值时前端叠加 XYZ 瓦片
+    tiles: config.mapTileUrl ? {
+      urlTemplate: config.mapTileUrl,
+      attribution: config.mapTileAttribution,
+      maxZoom: config.mapTileMaxZoom,
+    } : null,
     bounds: withCoords.length ? {
       minLat: Math.min(...lats), maxLat: Math.max(...lats),
       minLng: Math.min(...lngs), maxLng: Math.max(...lngs),
@@ -190,7 +196,7 @@ router.get('/migrations', auth, async (req, res) => {
      FROM event e JOIN person p ON p.id = e.person_id
      WHERE p.family_id = $1 AND p.status = 'active' AND e.event_type = 'migration'
      ORDER BY e.event_date DESC NULLS LAST LIMIT 200`,
-    [FAMILY_ID]
+    [currentFamilyId()]
   );
   res.json(rows.map((r) => ({
     id: r.id,
@@ -228,7 +234,7 @@ router.post('/', auth, adminOnly, async (req, res) => {
   if (b.parentId !== undefined && b.parentId !== null && b.parentId !== '') {
     if (!/^[0-9a-f-]{36}$/i.test(String(b.parentId))) return bad(res, '上级地点 ID 无效');
     const { rows: parentRows } = await query(
-      'SELECT id FROM place WHERE id = $1 AND family_id = $2', [b.parentId, FAMILY_ID]
+      'SELECT id FROM place WHERE id = $1 AND family_id = $2', [b.parentId, currentFamilyId()]
     );
     if (!parentRows.length) return bad(res, '上级地点不存在');
     parentId = b.parentId;
@@ -242,11 +248,11 @@ router.post('/', auth, adminOnly, async (req, res) => {
     const { rows } = await query(
       `INSERT INTO place (family_id, name, province, city, lat, lng, aliases, note, parent_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [FAMILY_ID, name, province, city, lat, lng, JSON.stringify(aliases),
+      [currentFamilyId(), name, province, city, lat, lng, JSON.stringify(aliases),
         String(b.note || '').slice(0, 500), parentId]
     );
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'create', entityType: 'place', entityId: rows[0].id,
       after: { name, province, city, aliases },
@@ -294,7 +300,7 @@ router.put('/:id', auth, adminOnly, async (req, res) => {
       while (cur && !seen.has(cur)) {
         if (cur === req.params.id) return bad(res, '不能形成地点层级环路');
         seen.add(cur);
-        const { rows } = await query('SELECT parent_id FROM place WHERE id = $1 AND family_id = $2', [cur, FAMILY_ID]);
+        const { rows } = await query('SELECT parent_id FROM place WHERE id = $1 AND family_id = $2', [cur, currentFamilyId()]);
         cur = rows[0]?.parent_id || null;
       }
       fields.parent_id = b.parentId;
@@ -307,17 +313,17 @@ router.put('/:id', auth, adminOnly, async (req, res) => {
   if (!keys.length) return bad(res, '没有要更新的字段');
 
   const { rows: before } = await query(
-    'SELECT * FROM place WHERE id = $1 AND family_id = $2', [req.params.id, FAMILY_ID]
+    'SELECT * FROM place WHERE id = $1 AND family_id = $2', [req.params.id, currentFamilyId()]
   );
   if (!before.length) return res.status(404).json({ error: '地点不存在' });
 
   const setClause = keys.map((k, i) => `${k} = $${i + 3}`).join(', ');
   await query(
     `UPDATE place SET ${setClause}, updated_at = now() WHERE id = $1 AND family_id = $2`,
-    [req.params.id, FAMILY_ID, ...keys.map((k) => fields[k])]
+    [req.params.id, currentFamilyId(), ...keys.map((k) => fields[k])]
   );
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'update', entityType: 'place', entityId: req.params.id,
     before: before[0], after: fields,
@@ -339,14 +345,14 @@ router.post('/merge', auth, adminOnly, async (req, res) => {
   if (sourceId === targetId) return bad(res, '不能与自身合并');
 
   const { rows: pair } = await query(
-    'SELECT * FROM place WHERE id = ANY($1) AND family_id = $2', [[sourceId, targetId], FAMILY_ID]
+    'SELECT * FROM place WHERE id = ANY($1) AND family_id = $2', [[sourceId, targetId], currentFamilyId()]
   );
   const source = pair.find((p) => p.id === sourceId);
   const target = pair.find((p) => p.id === targetId);
   if (!source || !target) return res.status(404).json({ error: '地点不存在' });
 
   await query('UPDATE place SET parent_id = $1 WHERE parent_id = $2 AND family_id = $3',
-    [targetId, sourceId, FAMILY_ID]);
+    [targetId, sourceId, currentFamilyId()]);
   // 别名合并去重
   const mergedAliases = [...new Set([...(target.aliases || []), source.name, ...(source.aliases || [])])]
     .filter((a) => a && a !== target.name);
@@ -355,7 +361,7 @@ router.post('/merge', auth, adminOnly, async (req, res) => {
   await query('DELETE FROM place WHERE id = $1', [sourceId]);
 
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'update', entityType: 'place', entityId: targetId,
     after: { mergedFrom: source.name, aliases: mergedAliases },
@@ -367,11 +373,11 @@ router.post('/merge', auth, adminOnly, async (req, res) => {
 router.delete('/:id', auth, adminOnly, async (req, res) => {
   const { rows } = await query(
     'DELETE FROM place WHERE id = $1 AND family_id = $2 RETURNING name',
-    [req.params.id, FAMILY_ID]
+    [req.params.id, currentFamilyId()]
   );
   if (!rows.length) return res.status(404).json({ error: '地点不存在' });
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'delete', entityType: 'place', entityId: req.params.id,
     before: { name: rows[0].name },

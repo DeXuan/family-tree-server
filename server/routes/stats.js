@@ -2,10 +2,9 @@ import { logger } from '../modules/logger.js';
 import express from 'express';
 import { query } from '../db/db.js';
 import { auth } from '../middleware/auth.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 
 router.get('/', auth, async (req, res) => {
   try {
@@ -15,14 +14,14 @@ router.get('/', auth, async (req, res) => {
                     COUNT(*) FILTER (WHERE is_deceased)::int AS deceased,
                     MAX(generation_no)::int AS max_gen,
                     COUNT(DISTINCT generation_no) FILTER (WHERE NOT is_deceased AND generation_no IS NOT NULL)::int AS alive_generations
-             FROM person WHERE family_id = $1 AND status = 'active'`, [FAMILY_ID]),
+             FROM person WHERE family_id = $1 AND status = 'active'`, [currentFamilyId()]),
       query(`SELECT branch, COUNT(*)::int AS c FROM person
              WHERE family_id = $1 AND status = 'active' AND branch <> ''
-             GROUP BY branch ORDER BY branch`, [FAMILY_ID]),
+             GROUP BY branch ORDER BY branch`, [currentFamilyId()]),
       query(`SELECT actor_label, action, entity_type, entity_id, before, after, created_at FROM audit_log
-             WHERE family_id = $1 ORDER BY created_at DESC LIMIT 5`, [FAMILY_ID]),
-      query('SELECT name, surname FROM family WHERE id = $1', [FAMILY_ID]),
-      query("SELECT COUNT(*)::int AS c FROM person WHERE family_id = $1 AND status = 'archived'", [FAMILY_ID]),
+             WHERE family_id = $1 ORDER BY created_at DESC LIMIT 5`, [currentFamilyId()]),
+      query('SELECT name, surname FROM family WHERE id = $1', [currentFamilyId()]),
+      query("SELECT COUNT(*)::int AS c FROM person WHERE family_id = $1 AND status = 'archived'", [currentFamilyId()]),
     ]);
     res.json({
       familyName: fam[0]?.name || '家族族谱',

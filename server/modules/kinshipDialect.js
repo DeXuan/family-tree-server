@@ -138,3 +138,122 @@ export function dialectGlossary(dialect) {
     .sort((a, b) => a.localeCompare(b, 'zh'))
     .map((standard) => ({ standard, dialect: table[standard] || standard }));
 }
+
+// ---------------------------------------------------------------------------
+// 家族自定义词条：允许覆盖内置映射里的个别称谓
+// 存 family.settings.dialectOverrides = { wu: { 父亲: '阿爹' }, ... }
+// ---------------------------------------------------------------------------
+
+export const MAX_OVERRIDES = 60;
+const MAX_TERM_LEN = 10;
+
+/** 规整自定义词条：只保留合法方言键 + 非空短词条，限量 */
+export function normalizeOverrides(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out = {};
+  let count = 0;
+  for (const [dialect, map] of Object.entries(input)) {
+    if (dialect === 'standard' || !TABLE[dialect]) continue;
+    if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
+    const clean = {};
+    for (const [std, term] of Object.entries(map)) {
+      if (count >= MAX_OVERRIDES) break;
+      const s = String(std || '').trim();
+      const t = String(term || '').trim();
+      if (!s || !t) continue;
+      if (s.length > MAX_TERM_LEN || t.length > MAX_TERM_LEN) continue;
+      clean[s] = t;
+      count++;
+    }
+    if (Object.keys(clean).length) out[dialect] = clean;
+  }
+  return out;
+}
+
+/**
+ * 带自定义词条的翻译：先查家族覆盖，再查内置表。
+ * @param {string} term 标准称谓
+ * @param {string} dialect 方言键
+ * @param {object} overrides 家族自定义词条
+ */
+export function toDialectWithOverrides(term, dialect, overrides = {}) {
+  const std = String(term || '').trim();
+  if (!std) return std;
+  if (!dialect || dialect === 'standard') return std;
+  const ov = overrides?.[dialect];
+  if (ov && typeof ov === 'object' && ov[std]) return ov[std];
+  return toDialect(std, dialect);
+}
+
+/** 该方言生效的完整映射（内置 + 覆盖），用于对照表展示 */
+export function effectiveTable(dialect, overrides = {}) {
+  const builtin = dialect === 'standard' ? {} : { ...(TABLE[dialect] || {}) };
+  const ov = overrides?.[dialect];
+  if (ov && typeof ov === 'object') {
+    for (const [k, v] of Object.entries(ov)) builtin[k] = v;
+  }
+  return builtin;
+}
+
+/** 对照表（含自定义覆盖标记） */
+export function glossaryWithOverrides(dialect, overrides = {}) {
+  const builtin = effectiveTable(dialect, {});
+  const ov = overrides?.[dialect] || {};
+  const merged = effectiveTable(dialect, overrides);
+  const keys = Object.keys({ ...builtin, ...merged }).sort((a, b) => a.localeCompare(b, 'zh'));
+  return keys.map((standard) => ({
+    standard,
+    dialect: merged[standard] ?? standard,
+    overridden: Object.prototype.hasOwnProperty.call(ov, standard),
+  }));
+}
+
+/** 校验一条覆盖词条 */
+export function validateOverride({ dialect, standard, term }) {
+  const d = String(dialect || '').trim();
+  if (d === 'standard' || !TABLE[d]) return { ok: false, error: '请选择受支持的方言' };
+  const s = String(standard || '').trim();
+  const t = String(term || '').trim();
+  if (!s) return { ok: false, error: '标准称谓必填' };
+  if (!t) return { ok: false, error: '方言称谓必填' };
+  if (s.length > MAX_TERM_LEN) return { ok: false, error: `标准称谓不能超过 ${MAX_TERM_LEN} 字` };
+  if (t.length > MAX_TERM_LEN) return { ok: false, error: `方言称谓不能超过 ${MAX_TERM_LEN} 字` };
+  return { ok: true, override: { dialect: d, standard: s, term: t } };
+}
+
+/** 应用一条覆盖（返回新的 overrides 对象） */
+export function applyOverride(overrides, { dialect, standard, term }) {
+  const base = normalizeOverrides(overrides);
+  const next = { ...base, [dialect]: { ...(base[dialect] || {}), [standard]: term } };
+  let count = 0;
+  for (const m of Object.values(next)) count += Object.keys(m).length;
+  if (count > MAX_OVERRIDES) return { ok: false, error: `自定义词条最多 ${MAX_OVERRIDES} 条`, overrides: base };
+  return { ok: true, overrides: next };
+}
+
+/** 移除一条覆盖 */
+export function removeOverride(overrides, { dialect, standard }) {
+  const base = normalizeOverrides(overrides);
+  const map = base[dialect];
+  if (!map || !Object.prototype.hasOwnProperty.call(map, standard)) {
+    return { ok: false, error: '没有这条自定义词条', overrides: base };
+  }
+  const nextMap = { ...map };
+  delete nextMap[standard];
+  const next = { ...base };
+  if (Object.keys(nextMap).length) next[dialect] = nextMap;
+  else delete next[dialect];
+  return { ok: true, overrides: next };
+}
+
+/** 让 withDialect 支持覆盖（保持向后兼容：不传 overrides 时行为不变） */
+export function withDialectAndOverrides(result, dialect, overrides = {}) {
+  if (!result || typeof result !== 'object') return result;
+  const dialectTerm = toDialectWithOverrides(result.term, dialect, overrides);
+  return {
+    ...result,
+    dialect: dialect && dialect !== 'standard' ? dialect : 'standard',
+    dialectTerm,
+    dialectDiffers: dialectTerm !== result.term,
+  };
+}

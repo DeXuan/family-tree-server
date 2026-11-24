@@ -5,7 +5,7 @@ import { auth, editorUp } from '../middleware/auth.js';
 import { audit } from './audit.js';
 import { validateEventInput } from '../middleware/validation.js';
 import { uuidParam } from '../middleware/params.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 
 const router = express.Router();
 
@@ -20,7 +20,6 @@ function readBody(req, res) {
 }
 router.param('personId', uuidParam);
 router.param('eventId', uuidParam);
-const FAMILY_ID = config.familyId;
 
 const EVENT_TYPES = ['birth', 'adoption', 'marriage', 'divorce', 'education', 'career',
   'migration', 'military', 'award', 'residence', 'death', 'burial', 'custom'];
@@ -44,7 +43,7 @@ function viewRank(req, person) {
 async function getPerson(personId) {
   const { rows } = await query(
     "SELECT id, family_id, family_name, given_name FROM person WHERE id = $1 AND family_id = $2 AND status = 'active'",
-    [personId, FAMILY_ID]
+    [personId, currentFamilyId()]
   );
   return rows[0] || null;
 }
@@ -102,7 +101,7 @@ router.post('/:personId', auth, editorUp, async (req, res) => {
     );
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'create', entityType: 'event', entityId: rows[0].id,
       after: { personId: person.id, title: rows[0].title, type, visibility },
@@ -173,7 +172,7 @@ router.put('/:eventId', auth, editorUp, async (req, res) => {
     );
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'update', entityType: 'event', entityId: req.params.eventId,
       before, after: rows[0],
@@ -192,7 +191,7 @@ router.delete('/:eventId', auth, editorUp, async (req, res) => {
   const { rows } = await query('DELETE FROM event WHERE id = $1 RETURNING *', [req.params.eventId]);
     if (!rows.length) return res.status(404).json({ error: '事件不存在' });
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'delete', entityType: 'event', entityId: req.params.eventId,
       before: rows[0],

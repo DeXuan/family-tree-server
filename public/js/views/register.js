@@ -84,6 +84,11 @@ export async function renderRegister(root, params) {
         body: { token, username, password: pw },
       });
       session.set(data.token, data.user);
+      // 多家族：记住可访问家族，首个作为默认当前家族
+      if (data.families?.length) {
+        session.setFamilies(data.families);
+        session.setFamilyId(data.families[0].id);
+      }
       location.hash = '#/';
     } catch (err) {
       errorBox.hidden = false;

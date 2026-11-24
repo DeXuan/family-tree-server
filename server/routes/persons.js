@@ -9,7 +9,7 @@ import { encryptJSON } from '../modules/crypto.js';
 import { validatePersonInput } from '../middleware/validation.js';
 import { uuidParam } from '../middleware/params.js';
 import { buildPersonUpdate, parseDate } from '../modules/personFields.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 
 const router = express.Router();
 
@@ -23,7 +23,6 @@ function readBody(req, res) {
   return b || {};
 }
 router.param('id', uuidParam);
-const FAMILY_ID = config.familyId; // 单家族演示：默认家族
 
 const COLUMNS = `id, family_id, family_name, given_name, courtesy_name, former_names, generation_name,
   generation_no, branch, gender, birth_date, birth_precision, birth_place,
@@ -53,7 +52,7 @@ router.get('/', auth, async (req, res) => {
       return res.status(400).json({ error: '支系名称不能超过 50 字' });
     }
     const conds = ['family_id = $1', "status = 'active'"];
-    const params = [FAMILY_ID];
+    const params = [currentFamilyId()];
     let idx = params.length + 1;
 
     if (keyword) {
@@ -98,7 +97,7 @@ router.get('/:id', auth, async (req, res) => {
   try {
     const { rows } = await query(
       `SELECT ${COLUMNS} FROM person WHERE id = $1 AND family_id = $2`,
-      [req.params.id, FAMILY_ID]
+      [req.params.id, currentFamilyId()]
     );
     if (!rows.length) return res.status(404).json({ error: '成员不存在' });
     res.json(redactPerson(rows[0], viewerCtx(req, rows[0])));
@@ -125,7 +124,7 @@ router.post('/', auth, editorUp, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING id`,
       [
-        id, FAMILY_ID,
+        id, currentFamilyId(),
         b.family_name || '', b.given_name || '', b.courtesy_name || '',
         JSON.stringify(Array.isArray(b.former_names) ? b.former_names : []),
         b.generation_name || '', b.generation_no ?? null, b.branch || '',
@@ -138,7 +137,7 @@ router.post('/', auth, editorUp, async (req, res) => {
       ]
     );
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'create', entityType: 'person', entityId: id,
       after: b,
@@ -159,7 +158,7 @@ router.put('/:id', auth, editorUp, async (req, res) => {
     if (invalid) return res.status(400).json({ error: invalid });
     // 先取改前记录（也用于判断是否本人）
     const { rows: beforeRows } = await query(`SELECT * FROM person WHERE id = $1 AND family_id = $2`,
-      [req.params.id, FAMILY_ID]);
+      [req.params.id, currentFamilyId()]);
     if (!beforeRows.length) return res.status(404).json({ error: '成员不存在' });
     const before = beforeRows[0];
     const isSelf = !!req.user.personId && req.user.personId === before.id;
@@ -194,11 +193,11 @@ router.put('/:id', auth, editorUp, async (req, res) => {
     const values = keys.map((k) => fields[k]);
     await query(
       `UPDATE person SET ${setClause}, updated_at = now() WHERE id = $1 AND family_id = $2`,
-      [req.params.id, FAMILY_ID, ...values]
+      [req.params.id, currentFamilyId(), ...values]
     );
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'update', entityType: 'person', entityId: req.params.id,
       before, after: fields,
@@ -216,11 +215,11 @@ router.delete('/:id', auth, adminOnly, async (req, res) => {
     const { rows } = await query(
       `UPDATE person SET status = 'archived', updated_at = now()
        WHERE id = $1 AND family_id = $2 RETURNING id`,
-      [req.params.id, FAMILY_ID]
+      [req.params.id, currentFamilyId()]
     );
     if (!rows.length) return res.status(404).json({ error: '成员不存在' });
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'delete', entityType: 'person', entityId: req.params.id,
     });

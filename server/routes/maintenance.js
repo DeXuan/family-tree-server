@@ -3,11 +3,10 @@ import express from 'express';
 import { query, withTransaction } from '../db/db.js';
 import { auth, adminOnly } from '../middleware/auth.js';
 import { audit } from './audit.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { isUuid } from '../middleware/params.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 
 const yearOf = (v) => {
   if (!v) return null;
@@ -21,7 +20,7 @@ router.get('/duplicates', auth, adminOnly, async (req, res) => {
     `SELECT id, family_name, given_name, courtesy_name, birth_date, generation_no, branch, is_deceased
      FROM person WHERE family_id = $1 AND status = 'active'
      ORDER BY family_name, given_name, birth_date NULLS LAST`,
-    [FAMILY_ID]
+    [currentFamilyId()]
   );
 
   const groups = new Map();
@@ -92,7 +91,7 @@ router.post('/merge', auth, adminOnly, async (req, res) => {
       const { rows: pair } = await client.query(
         `SELECT * FROM person
          WHERE id = ANY($1) AND family_id = $2 AND status = 'active' FOR UPDATE`,
-        [[sourceId, targetId], FAMILY_ID]
+        [[sourceId, targetId], currentFamilyId()]
       );
       const source = pair.find((p) => p.id === sourceId);
       const target = pair.find((p) => p.id === targetId);
@@ -196,7 +195,7 @@ router.post('/merge', auth, adminOnly, async (req, res) => {
           `INSERT INTO association (family_id, person_a_id, person_b_id, role, note, created_by, created_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7)
            ON CONFLICT (person_a_id, person_b_id, role) DO NOTHING`,
-          [FAMILY_ID, aId, bId, as.role, as.note, as.created_by, as.created_at]
+          [currentFamilyId(), aId, bId, as.role, as.note, as.created_by, as.created_at]
         );
         counts.associations++;
       }
@@ -267,7 +266,7 @@ router.post('/merge', auth, adminOnly, async (req, res) => {
     if (result.error) return res.status(result.status || 400).json({ error: result.error });
 
     await audit({
-      familyId: FAMILY_ID,
+      familyId: currentFamilyId(),
       actorUserId: req.user.id, actorLabel: req.user.username,
       action: 'update', entityType: 'person', entityId: result.targetId,
       after: { mergedFrom: result.sourceName, counts: result.counts, fieldChoices: result.choices },

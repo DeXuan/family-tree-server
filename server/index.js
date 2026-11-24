@@ -8,6 +8,8 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { config } from './config/index.js';
 import { initDb, closeDb, query } from './db/db.js';
+import familyRoutes from './routes/families.js';
+import { tenantContext } from './middleware/tenant.js';
 import { wrapAll } from './middleware/wrapRouterAsync.js';
 import { logger } from './modules/logger.js';
 import authRoutes from './routes/auth.js';
@@ -24,6 +26,7 @@ import mediaRoutes from './routes/media.js';
 import changeRequestRoutes from './routes/changeRequests.js';
 import maintenanceRoutes from './routes/maintenance.js';
 import repositoryRoutes from './routes/repositories.js';
+import pdfExportRoutes from './routes/pdfExport.js';
 import sourceRoutes from './routes/sources.js';
 import citationRoutes from './routes/citations.js';
 import narrativeRoutes from './routes/narrativeImport.js';
@@ -38,13 +41,25 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 app.set('trust proxy', 1);
+// 可选地图瓦片域名：只有显式配置 MAP_TILE_URL 才把该源加入 CSP（默认严格离线）
+const tileOrigin = (() => {
+  if (!config.mapTileUrl) return null;
+  try {
+    // 模板里常见 {s} 占位，取基础域名做 CSP 源
+    const probe = config.mapTileUrl.split('{s}').join('a');
+    const u = new URL(probe);
+    return `https://${u.hostname.replace(/^a\./, '')}`;
+  } catch { return null; }
+})();
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
       styleSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'blob:'],
+      imgSrc: ["'self'", 'data:', 'blob:', ...(tileOrigin ? [tileOrigin] : [])],
+      ...(tileOrigin ? { connectSrc: ["'self'", tileOrigin] } : {}),
     },
   },
 }));
@@ -70,6 +85,9 @@ app.use('/api', (req, res, next) => {
   });
   next();
 });
+
+// 多家族上下文：解析 X-Family-Id（校验权限后写入 AsyncLocalStorage）
+app.use('/api', tenantContext);
 
 // 认证限速：防撞库/刷注册。
 // 开发环境（非 production）对回环地址豁免，保证本地测试可重复；
@@ -113,10 +131,11 @@ wrapAll([
   invitationRoutes, eventRoutes, mediaRoutes, changeRequestRoutes, sourceRoutes,
   citationRoutes, narrativeRoutes, placeRoutes, associationRoutes, qualityRoutes,
   storyRoutes, storyVersionRoutes, maintenanceRoutes, statsRoutes, exportImportRoutes,
-  repositoryRoutes,
+  repositoryRoutes, pdfExportRoutes, familyRoutes,
 ]);
 
 app.use('/api/auth', authRoutes);
+app.use('/api/families', familyRoutes);
 app.use('/api/persons', personRoutes);
 app.use('/api/relations', relationRoutes);
 app.use('/api/tree', treeRoutes);
@@ -128,6 +147,7 @@ app.use('/api/media', mediaRoutes);
 app.use('/api/change-requests', changeRequestRoutes);
 app.use('/api/sources', sourceRoutes);
 app.use('/api/repositories', repositoryRoutes);
+app.use('/api/export', pdfExportRoutes);
 app.use('/api/citations', citationRoutes);
 app.use('/api/import', narrativeRoutes);
 app.use('/api/places', placeRoutes);
@@ -142,6 +162,20 @@ app.use('/api/import', exportImportRoutes);
 
 // 前端静态资源 + SPA 回退（/api 不吞）
 // index:false —— 让下面的 SPA 回退负责返回 index.html（便于注入 app-base）
+// Service Worker 必须不被缓存，否则用户永远拿不到新版本
+app.get('/sw.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Service-Worker-Allowed', '/');
+  res.sendFile(path.join(__dirname, '../public/sw.js'));
+});
+
+// Web App Manifest 需要正确的 MIME
+app.get('/manifest.webmanifest', (req, res) => {
+  res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+  res.sendFile(path.join(__dirname, '../public/manifest.webmanifest'));
+});
+
 app.use(express.static(path.join(__dirname, '../public'), { index: false }));
 // SPA 回退：注入 app-base（部署在子路径时前端 API 需要前缀）
 const INDEX_HTML = path.join(__dirname, '../public/index.html');

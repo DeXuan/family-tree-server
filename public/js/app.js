@@ -77,6 +77,9 @@ function shell(activePath, title) {
         <div class="brand">
           <div class="brand-mark">祖</div>
           <div class="brand-text"><strong>${esc(familyName)}</strong><span>FAMILY ARCHIVE</span></div>
+          ${session.isMultiFamily ? `<select id="family-switch" class="family-switch" aria-label="切换家族">`
+            + session.families.map((f) => `<option value="${esc(f.id)}" ${f.id === session.familyId ? 'selected' : ''}>${esc(f.name)}</option>`).join('')
+            + '</select>' : ''}
         </div>
         <nav class="nav">
           ${navHtml(activePath)}
@@ -145,6 +148,16 @@ function shell(activePath, title) {
     });
   });
 
+  root.querySelector('#family-switch')?.addEventListener('change', async (e) => {
+    const id = e.currentTarget.value;
+    session.setFamilyId(id);
+    // 家族切换后所有数据都要重载，回到首页最直观
+    const fam = session.families.find((f) => f.id === id);
+    if (fam) { familyName = fam.name; sessionStorage.setItem('ft_family', fam.name); }
+    sessionStorage.removeItem('ft_family');
+    location.hash = '#/';
+    location.reload();
+  });
   root.querySelector('#logout').addEventListener('click', async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* 忽略 */ }
     session.clear();
@@ -245,6 +258,18 @@ async function router() {
 function notice(text) {
   return `<div class="content"><div class="notice">${esc(text)}</div></div>`;
 }
+
+// PWA：注册 Service Worker（相对 app-base，兼容 nginx 子路径）
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const base = document.querySelector('meta[name="app-base"]')?.content || '';
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register(`${base}/sw.js`, { scope: `${base}/` })
+      .catch((e) => console.warn('[pwa] SW 注册失败：', e.message));
+  });
+}
+
+registerServiceWorker();
 
 window.addEventListener('hashchange', router);
 router();

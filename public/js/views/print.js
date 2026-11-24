@@ -1,5 +1,5 @@
-import { api, session } from '../api.js';
-import { esc, fmtDate } from '../ui.js';
+import { api, session, withBase } from '../api.js';
+import { esc, fmtDate, toast } from '../ui.js';
 
 /** 宗谱打印页：浏览器Ctrl+P即可另存为PDF，打印样式在styles.css的@media print */
 export async function renderPrint(root) {
@@ -34,6 +34,7 @@ export async function renderPrint(root) {
   root.innerHTML = `
     <div class="print-toolbar">
       <button class="btn btn-primary btn-sm" type="button" id="btn-print">打印 / 另存 PDF</button>
+      <button class="btn btn-sm" type="button" id="btn-pdf">服务端生成 PDF</button>
       <a class="btn btn-sm" href="#/tree">返回世系树</a>
       <span class="small muted">在打印对话框中选择"另存为 PDF"即可导出</span>
     </div>
@@ -76,4 +77,29 @@ export async function renderPrint(root) {
   });
 
   root.querySelector('#btn-print').addEventListener('click', () => window.print());
+  root.querySelector('#btn-pdf').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = '正在生成…';
+    try {
+      const cap = await api('/api/export/pdf/capability');
+      if (!cap.available) throw new Error('服务端未配置渲染器');
+      const t = await api('/api/export/pdf/ticket', {
+        method: 'POST',
+        body: { kind: 'genealogy', options: { preset: 'a4_portrait', title: `${surname}宗谱` } },
+      });
+      const a = document.createElement('a');
+      a.href = withBase(t.renderUrl);
+      a.download = `${surname}宗谱.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast('PDF 生成中，完成后自动下载', 'ok');
+    } catch (err) {
+      toast(`服务端 PDF 不可用（${err.message}），改用浏览器打印`, 'error');
+      window.print();
+    }
+    btn.disabled = false;
+    btn.textContent = '服务端生成 PDF';
+  });
 }

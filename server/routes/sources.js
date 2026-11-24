@@ -2,12 +2,11 @@ import express from 'express';
 import { query } from '../db/db.js';
 import { auth, editorUp, adminOnly } from '../middleware/auth.js';
 import { audit } from './audit.js';
-import { config } from '../config/index.js';
+import { currentFamilyId } from '../middleware/tenant.js';
 import { uuidParam, isUuid } from '../middleware/params.js';
 import { validateBody } from '../middleware/validateBody.js';
 
 const router = express.Router();
-const FAMILY_ID = config.familyId;
 router.param('id', uuidParam);
 
 const LIMITS = { title: 200, author: 200, publication: 200, repository: 200, note: 2000 };
@@ -34,7 +33,7 @@ router.get('/', auth, async (req, res) => {
      LEFT JOIN repository r ON r.id = s.repository_id
      WHERE s.family_id = $1
      ORDER BY s.title`,
-    [FAMILY_ID]
+    [currentFamilyId()]
   );
   res.json(rows.map((r) => ({ ...r, citationCount: r.citation_count })));
 });
@@ -60,7 +59,7 @@ router.post('/', auth, editorUp, async (req, res) => {
   let repoName = b.repository || '';
   if (repositoryId) {
     const { rows: rr } = await query(
-      'SELECT name FROM repository WHERE id = $1 AND family_id = $2', [repositoryId, FAMILY_ID]
+      'SELECT name FROM repository WHERE id = $1 AND family_id = $2', [repositoryId, currentFamilyId()]
     );
     if (!rr.length) return res.status(400).json({ error: '收藏地不存在' });
     repoName = rr[0].name;
@@ -68,11 +67,11 @@ router.post('/', auth, editorUp, async (req, res) => {
   const { rows } = await query(
     `INSERT INTO source (family_id, title, author, publication, repository, note, created_by, repository_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [FAMILY_ID, fields.title, fields.author || '', fields.publication || '',
+    [currentFamilyId(), fields.title, fields.author || '', fields.publication || '',
       repoName, fields.note || '', req.user.id, repositoryId]
   );
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'create', entityType: 'source', entityId: rows[0].id,
     after: { title: fields.title },
@@ -93,7 +92,7 @@ router.put('/:id', auth, editorUp, async (req, res) => {
     } else {
       if (!isUuid(rid)) return res.status(400).json({ error: '收藏地 ID 格式无效' });
       const { rows: rr } = await query(
-        'SELECT name FROM repository WHERE id = $1 AND family_id = $2', [rid, FAMILY_ID]
+        'SELECT name FROM repository WHERE id = $1 AND family_id = $2', [rid, currentFamilyId()]
       );
       if (!rr.length) return res.status(400).json({ error: '收藏地不存在' });
       fields.repository_id = rid;
@@ -105,7 +104,7 @@ router.put('/:id', auth, editorUp, async (req, res) => {
   if (!keys.length) return res.status(400).json({ error: '没有要更新的字段' });
 
   const { rows: beforeRows } = await query(
-    'SELECT * FROM source WHERE id = $1 AND family_id = $2', [req.params.id, FAMILY_ID]
+    'SELECT * FROM source WHERE id = $1 AND family_id = $2', [req.params.id, currentFamilyId()]
   );
   if (!beforeRows.length) return res.status(404).json({ error: '来源不存在' });
 
@@ -113,10 +112,10 @@ router.put('/:id', auth, editorUp, async (req, res) => {
   await query(
     `UPDATE source SET ${setClause}, updated_at = now()
      WHERE id = $1 AND family_id = $2`,
-    [req.params.id, FAMILY_ID, ...keys.map((k) => fields[k])]
+    [req.params.id, currentFamilyId(), ...keys.map((k) => fields[k])]
   );
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'update', entityType: 'source', entityId: req.params.id,
     before: beforeRows[0], after: fields,
@@ -128,11 +127,11 @@ router.put('/:id', auth, editorUp, async (req, res) => {
 router.delete('/:id', auth, adminOnly, async (req, res) => {
   const { rows } = await query(
     'DELETE FROM source WHERE id = $1 AND family_id = $2 RETURNING title',
-    [req.params.id, FAMILY_ID]
+    [req.params.id, currentFamilyId()]
   );
   if (!rows.length) return res.status(404).json({ error: '来源不存在' });
   await audit({
-    familyId: FAMILY_ID,
+    familyId: currentFamilyId(),
     actorUserId: req.user.id, actorLabel: req.user.username,
     action: 'delete', entityType: 'source', entityId: req.params.id,
     before: { title: rows[0].title },
