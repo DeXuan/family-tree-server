@@ -96,6 +96,8 @@ function shell(activePath, title) {
             <span class="avatar">${esc((user.username || '?').slice(0, 1).toUpperCase())}</span>
             <span>${esc(user.username || '')}</span>
           </div>
+          <button class="btn btn-ghost btn-sm theme-toggle" type="button" id="theme-toggle"
+                  aria-label="切换深浅色主题">☾</button>
           <button class="btn btn-ghost btn-sm" type="button" id="change-pw">改密</button>
           <button class="btn btn-ghost btn-sm" type="button" id="logout">退出</button>
         </div>
@@ -158,6 +160,25 @@ function shell(activePath, title) {
     location.hash = '#/';
     location.reload();
   });
+  // 深色主题：跟随系统或手动切换，选择写入 localStorage
+  const THEME_KEY = 'ft_theme';
+  function syncThemeButton() {
+    const btn = root.querySelector('#theme-toggle');
+    if (!btn) return;
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    btn.textContent = dark ? '☀' : '☾';
+    btn.setAttribute('aria-label', dark ? '切换到浅色主题' : '切换到深色主题');
+    btn.title = btn.getAttribute('aria-label');
+  }
+  root.querySelector('#theme-toggle')?.addEventListener('click', () => {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const next = dark ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem(THEME_KEY, next); } catch { /* 隐私模式忽略 */ }
+    syncThemeButton();
+  });
+  syncThemeButton();
+
   root.querySelector('#logout').addEventListener('click', async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* 忽略 */ }
     session.clear();

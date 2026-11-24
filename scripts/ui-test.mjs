@@ -121,7 +121,7 @@ try {
   // 3b. 布局模式：缩进列表 ⇄ 自上而下结构图
   console.log('  布局切换：');
   const segCount = await page.locator('[data-layout]').count();
-  segCount === 2 ? pass('提供两种布局切换按钮') : fail('布局切换按钮', String(segCount));
+  segCount === 3 ? pass('提供三种布局切换按钮') : fail('布局切换按钮', String(segCount));
   const zoomHiddenInList = await page.locator('#org-zoom').isHidden();
   zoomHiddenInList ? pass('列表模式隐藏缩放栏') : fail('列表模式未隐藏缩放栏');
 
@@ -180,6 +180,108 @@ try {
   await page.click('[data-layout="list"]'); await page.waitForTimeout(300);
   (await page.locator('.tree').count()) === 1 ? pass('可切回缩进列表') : fail('切回列表失败');
   (await page.locator('#org-zoom').isHidden()) ? pass('切回列表后隐藏缩放栏') : fail('切回列表后缩放栏仍显示');
+
+  // 3c. 伞状放射视图
+  console.log('  伞状视图：');
+  const layoutBtns = await page.locator('[data-layout]').count();
+  layoutBtns === 3 ? pass('提供三种布局（列表/结构图/伞状）') : fail('布局按钮数量', String(layoutBtns));
+
+  await page.click('[data-layout="umb"]');
+  await page.waitForSelector('.umb-viewport', { timeout: 10000 });
+  const umbNodes = await page.locator('.umb-node').count();
+  umbNodes > 0 ? pass(`伞状图渲染 ${umbNodes} 个节点`) : fail('伞状图未渲染');
+  const umbPaths = await page.locator('.umb-links path').count();
+  umbPaths === 1 ? pass('伞状连线合并为单条 path（性能）') : fail('连线路径数', String(umbPaths));
+  (await page.locator('#umb-tools').isVisible()) ? pass('伞状图显示缩放工具条') : fail('缺少伞状工具条');
+
+  // 节点盒不重叠（可读性）
+  const overlapCount = await page.evaluate(() => {
+    const boxes = [...document.querySelectorAll('.umb-node')].map((el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height };
+    });
+    let n = 0;
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i];
+        const b = boxes[j];
+        if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) n++;
+      }
+    }
+    return n;
+  });
+  overlapCount === 0 ? pass('伞状节点无重叠') : fail('伞状节点重叠', String(overlapCount));
+
+  // 收起 / 展开
+  const umbBefore = await page.locator('.umb-node').count();
+  await page.locator('.umb-node [data-toggle]').first().click();
+  await page.waitForTimeout(300);
+  const umbCollapsed = await page.locator('.umb-node').count();
+  await page.locator('.umb-node [data-toggle]').first().click();
+  await page.waitForTimeout(300);
+  const umbExpanded = await page.locator('.umb-node').count();
+  (umbCollapsed < umbBefore && umbExpanded === umbBefore)
+    ? pass('伞状节点可收起并再展开')
+    : fail('伞状展开收起', `${umbBefore}->${umbCollapsed}->${umbExpanded}`);
+
+  // 滚轮缩放
+  const zl0 = (await page.locator('#umb-label').innerText()).trim();
+  const vpBox = await page.locator('.umb-viewport').boundingBox();
+  await page.mouse.move(vpBox.x + vpBox.width / 2, vpBox.y + vpBox.height / 2);
+  await page.mouse.wheel(0, -320);
+  await page.waitForTimeout(250);
+  const zl1 = (await page.locator('#umb-label').innerText()).trim();
+  zl0 !== zl1 ? pass(`伞状滚轮缩放 ${zl0}→${zl1}`) : fail('伞状滚轮缩放无效');
+
+  // 拖拽平移（且不误跳转）
+  const tfBefore = await page.locator('.umb-stage').evaluate((el) => el.style.transform);
+  await page.mouse.move(vpBox.x + vpBox.width / 2, vpBox.y + vpBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(vpBox.x + vpBox.width / 2 + 110, vpBox.y + vpBox.height / 2 + 60, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(250);
+  const tfAfter = await page.locator('.umb-stage').evaluate((el) => el.style.transform);
+  (tfBefore !== tfAfter && (await page.evaluate(() => location.hash)) === '#/tree')
+    ? pass('伞状拖拽平移且不误触跳转')
+    : fail('伞状拖拽平移');
+
+  await page.click('#umb-fit'); await page.waitForTimeout(250);
+  (await page.locator('#umb-label').innerText()).trim().endsWith('%')
+    ? pass('伞状适应画布可用')
+    : fail('伞状适应画布');
+
+  // 选中状态跨模式保持
+  await page.fill('#tree-search', '王建国');
+  await page.waitForTimeout(900);
+  await page.locator('#tree-search-results [data-jump]').first().click();
+  await page.waitForTimeout(800);
+  const selUmb = await page.locator('.umb-node.is-selected').count();
+  selUmb === 1 ? pass('伞状图定位后高亮选中') : fail('伞状选中高亮', String(selUmb));
+  await page.click('[data-layout="list"]');
+  await page.waitForTimeout(400);
+  const selList = await page.locator('.person-card.is-selected').count();
+  selList === 1 ? pass('切换布局后选中状态保持') : fail('切换后选中丢失', String(selList));
+
+  await shot('03c-tree-umbrella');
+  pass('伞状视图截图');
+
+  // 3d. 深浅色主题
+  console.log('  主题切换：');
+  const dark0 = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+  await page.click('#theme-toggle');
+  await page.waitForTimeout(250);
+  const darkInfo = await page.evaluate(() => ({
+    theme: document.documentElement.getAttribute('data-theme'),
+    bg: getComputedStyle(document.body).backgroundColor,
+  }));
+  (darkInfo.theme !== dark0 && darkInfo.bg !== 'rgb(246, 243, 236)')
+    ? pass(`主题可切换（${darkInfo.theme}）`)
+    : fail('主题切换', JSON.stringify(darkInfo));
+  await page.click('#theme-toggle');
+  await page.waitForTimeout(250);
+  const backTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+  backTheme === dark0 ? pass('主题可切回') : fail('主题切回', backTheme);
+
 
 
   // 展开全部
