@@ -194,6 +194,22 @@ try {
   (darkInfo.theme !== dark0 && darkInfo.bg !== 'rgb(246, 243, 236)')
     ? pass(`主题可切换（${darkInfo.theme}）`)
     : fail('主题切换', JSON.stringify(darkInfo));
+
+  // 深色下顶栏/内容区不得残留浅色背景（曾出现顶栏发白）
+  const darkSurfaces = await page.evaluate(() => {
+    const rgb = (el) => {
+      const m = getComputedStyle(el).backgroundColor.match(/rgba?\((\d+), (\d+), (\d+)/);
+      return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 0];
+    };
+    return {
+      topbar: rgb(document.querySelector('.topbar')),
+      body: rgb(document.body),
+    };
+  });
+  const isDark = (c) => c[0] < 120 && c[1] < 120 && c[2] < 120;
+  (isDark(darkSurfaces.topbar) && isDark(darkSurfaces.body))
+    ? pass('深色顶栏与底背景均为暗色')
+    : fail('深色下仍有浅色块', JSON.stringify(darkSurfaces));
   await page.click('#theme-toggle');
   await page.waitForTimeout(250);
   const backTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));

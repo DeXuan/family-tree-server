@@ -7,7 +7,7 @@
  * - API 请求：**完全不缓存**（族谱数据有时效性与权限，绝不能离线下发旧数据）
  */
 
-const VERSION = 'v5';
+const VERSION = 'v6';
 const SHELL_CACHE = `ft-shell-${VERSION}`;
 const ASSET_CACHE = `ft-asset-${VERSION}`;
 

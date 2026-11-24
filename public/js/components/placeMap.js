@@ -52,9 +52,9 @@ export async function renderPlaceMap(container) {
   const gridLines = [];
   for (let i = 0; i <= 4; i++) {
     const gy = PAD + (i / 4) * (H - PAD * 2);
-    gridLines.push(`<line x1="${PAD}" y1="${gy}" x2="${W - PAD}" y2="${gy}" stroke="#e3ddd1" stroke-width="1"/>`);
+    gridLines.push(`<line x1="${PAD}" y1="${gy}" x2="${W - PAD}" y2="${gy}" class="map-grid" stroke-width="1"/>`);
     const gx = PAD + (i / 4) * (W - PAD * 2);
-    gridLines.push(`<line x1="${gx}" y1="${PAD}" x2="${gx}" y2="${H - PAD}" stroke="#e3ddd1" stroke-width="1"/>`);
+    gridLines.push(`<line x1="${gx}" y1="${PAD}" x2="${gx}" y2="${H - PAD}" class="map-grid" stroke-width="1"/>`);
   }
 
   const placeById = new Map(data.places.map((p) => [p.id, p]));
@@ -65,7 +65,7 @@ export async function renderPlaceMap(container) {
     const midX = (a.x + c.x) / 2;
     const midY = (a.y + c.y) / 2 - 18;
     return `<path d="M ${a.x} ${a.y} Q ${midX} ${midY} ${c.x} ${c.y}"
-              fill="none" stroke="#9c3d2e" stroke-width="1.6" stroke-dasharray="5 3" opacity="0.75">
+              class="map-arrow" fill="none" stroke-width="1.6" stroke-dasharray="5 3" opacity="0.75">
               <title>${esc(m.personName)}${m.year ? ` · ${m.year}` : ''}：${esc(m.from.name)} → ${esc(m.to.name)}</title>
             </path>`;
   }).join('');
@@ -73,21 +73,21 @@ export async function renderPlaceMap(container) {
   const dots = data.places.map((p) => {
     const { x, y } = project(p.lat, p.lng);
     return `<g>
-      <circle cx="${x}" cy="${y}" r="9" fill="#9c3d2e" fill-opacity="0.14"/>
-      <circle cx="${x}" cy="${y}" r="4.5" fill="#9c3d2e" stroke="#fffdf8" stroke-width="1.5"/>
-      <text x="${x + 11}" y="${y + 4}" font-size="13" fill="#24211c">${esc(p.name)}</text>
+      <circle cx="${x}" cy="${y}" r="9" class="map-halo"/>
+      <circle cx="${x}" cy="${y}" r="4.5" class="map-dot" stroke-width="1.5"/>
+      <text x="${x + 11}" y="${y + 4}" font-size="13" class="map-label">${esc(p.name)}</text>
     </g>`;
   }).join('');
 
   container.innerHTML = `
     <div class="map-wrap">
       <svg viewBox="0 0 ${W} ${H}" class="place-svg" role="img" aria-label="家族地点分布示意图">
-        <rect width="${W}" height="${H}" fill="#faf8f3"/>
+        <rect width="${W}" height="${H}" class="map-bg"/>
 ${tiles ? tileLayer(W, H, PAD, b, mercY) : ''}
         ${gridLines.join('\n        ')}
         ${arrows}
         ${dots}
-        <text x="${PAD}" y="${H - 14}" font-size="11" fill="#8b8377">
+        <text x="${PAD}" y="${H - 14}" font-size="11" class="map-meta">
           经度 ${b.minLng.toFixed(2)}–${b.maxLng.toFixed(2)} · 纬度 ${b.minLat.toFixed(2)}–${b.maxLat.toFixed(2)}
           （示意图，不代表真实地理比例）
         </text>
