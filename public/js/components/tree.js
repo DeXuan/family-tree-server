@@ -57,7 +57,6 @@ export function renderTreeNodes(nodes, { mini = false } = {}) {
           <div class="couple">
             ${card(n)}
             ${spouses.map(spouseChip).join('')}
-            <span class="umb-spacer" aria-hidden="true"></span>
           </div>
         </div>
         ${hasKids ? `<ul class="tree-children">${n.children.map(node).join('')}</ul>` : ''}
@@ -109,9 +108,9 @@ export function wireTree(container) {
   container.addEventListener('click', (e) => {
     const toggle = e.target.closest('[data-toggle]');
     if (toggle) {
-      // 列表/结构图用 li，伞状图用 .umb-node：两者都要兼容
-      const holder = toggle.closest('li') || toggle.closest('.umb-node');
-      const kids = holder ? holder.querySelector(':scope > .tree-children, :scope > .org-children') : null;
+      // 列表模式用 li，结构图用 li，统一取子容器
+      const li = toggle.closest('li');
+      const kids = li ? li.querySelector(':scope > .tree-children, :scope > .org-children') : null;
       if (kids) {
         kids.classList.toggle('collapsed');
         toggle.textContent = kids.classList.contains('collapsed') ? '▸' : '▾';
@@ -128,52 +127,3 @@ export function wireTree(container) {
   });
 }
 
-/**
- * 伞状放射视图渲染。
- *
- * 性能取舍：连线用「单条 path 承载全部子路径」，节点用绝对定位的 HTML 卡片
- * （复用既有卡片样式与深色主题），缩放/平移只改 stage 的 transform，
- * 不触发重排与重绘。
- *
- * 坐标通过 data-x / data-y 输出，由调用方用 CSSOM 写入（CSP 禁止内联 style）。
- *
- * @param {object} result layoutUmbrella() 的返回值
- * @param {object} opts
- * @param {string|null} opts.selectedId 选中成员（跨模式保持高亮）
- */
-export function renderUmbrella(result, { selectedId = null } = {}) {
-  const nodes = result.nodes || [];
-  if (!nodes.length) {
-    return '<div class="empty"><div class="empty-mark">谱</div>该筛选条件下暂无成员</div>';
-  }
-
-  const nodeHtml = nodes.map((n) => {
-    const g = n.graph;
-    const spouses = g.spouses || [];
-    const sel = selectedId && n.id === selectedId ? ' is-selected' : '';
-    return `
-      <div class="umb-node${sel}" data-person="${esc(n.id)}" data-x="${n.x.toFixed(1)}" data-y="${n.y.toFixed(1)}" data-depth="${n.depth}">
-        <div class="umb-row">
-          ${n.hasChildren
-            ? `<button class="tree-toggle" type="button" data-toggle aria-label="展开或收起">${n.collapsed ? '▸' : '▾'}</button>`
-            : '<span class="tree-toggle" aria-hidden="true"></span>'}
-          <div class="couple">
-            ${card(g, n.isRoot ? 'is-focus' : '')}
-            ${spouses.map(spouseChip).join('')}
-          </div>
-        </div>
-      </div>`;
-  }).join('');
-
-  return `
-    <div class="umb-viewport" data-w="${result.width}" data-h="${result.height}">
-      <div class="umb-stage" data-w="${result.width}" data-h="${result.height}">
-        <svg class="umb-links" width="${result.width}" height="${result.height}"
-             viewBox="0 0 ${result.width} ${result.height}" aria-hidden="true" focusable="false">
-          <path d="${result.path}"></path>
-        </svg>
-        ${nodeHtml}
-      </div>
-      ${result.truncated ? '<div class="umb-note">节点过多，已截断显示；可用支系筛选缩小范围</div>' : ''}
-    </div>`;
-}

@@ -1,17 +1,20 @@
 import { api, download } from '../api.js';
 import { esc, debounce, toast } from '../ui.js';
-import { renderTreeNodes, renderOrgChart, renderUmbrella, wireTree } from '../components/tree.js';
-import { layoutUmbrella } from '../lib/radialLayout.js';
+import { renderTreeNodes, renderOrgChart, wireTree } from '../components/tree.js';
 
 let treeHideHandler = null;
-let treeResizeHandler = null;
 
-const LAYOUT_KEY = 'ft_tree_layout';   // 'list' | 'org' | 'umb'
+const LAYOUT_KEY = 'ft_tree_layout';   // 'list' | 'org'（历史值 'umb' 自动回退列表）
 const ZOOM_KEY = 'ft_tree_zoom';       // 50–150（百分比整数）
 
 function savedLayout() {
   const v = localStorage.getItem(LAYOUT_KEY);
-  return v === 'org' || v === 'umb' ? v : 'list';
+  // 伞状图已下线：历史遗留的 'umb' 自动迁移为列表并回写，避免重复判断
+  if (v === 'umb') {
+    localStorage.setItem(LAYOUT_KEY, 'list');
+    return 'list';
+  }
+  return v === 'org' ? 'org' : 'list';
 }
 
 function savedZoom() {
@@ -46,7 +49,6 @@ export async function renderTreePage(root) {
             <span class="seg">
               <button class="seg-btn" type="button" data-layout="list">缩进列表</button>
               <button class="seg-btn" type="button" data-layout="org">结构图</button>
-              <button class="seg-btn" type="button" data-layout="umb">伞状图</button>
             </span>
           </div>
           <button class="btn btn-sm" type="button" id="expand-all">全部展开</button>
@@ -97,15 +99,6 @@ export async function renderTreePage(root) {
         <button class="btn btn-sm" type="button" id="zoom-fit">适应宽度</button>
         <button class="btn btn-sm" type="button" id="zoom-reset">100%</button>
       </div>
-      <div class="umb-tools" id="umb-tools" hidden>
-        <span class="small muted">滚轮缩放 · 拖拽平移</span>
-        <div class="spacer"></div>
-        <button class="btn btn-sm" type="button" id="umb-out" aria-label="缩小">－</button>
-        <span class="zoom-label" id="umb-label">100%</span>
-        <button class="btn btn-sm" type="button" id="umb-in" aria-label="放大">＋</button>
-        <button class="btn btn-sm" type="button" id="umb-fit">适应画布</button>
-        <button class="btn btn-sm" type="button" id="umb-reset">重置</button>
-      </div>
 
       <div class="card">
         <div class="card-body tree-scroll" id="tree-canvas">
@@ -124,12 +117,9 @@ let layout = savedLayout();
   let lastData = null;
   let collapsedIds = new Set();        // 跨模式共享的「已收起」节点
   let selectedId = localStorage.getItem('ft_tree_selected') || null;
-  const umbState = { scale: 1, x: 0, y: 0, ready: false, auto: true };  // auto=当前缩放是自动适配的
 
   const zoomBar = root.querySelector('#org-zoom');
   const zoomLabel = root.querySelector('#zoom-label');
-  const umbTools = root.querySelector('#umb-tools');
-  const umbLabel = root.querySelector('#umb-label');
 
   // ---------- 结构图（org）缩放 ----------
   const orgStage = () => canvas.querySelector('.org-stage');
@@ -192,211 +182,23 @@ let layout = savedLayout();
     if (el) el.classList.add('is-selected');
   }
 
-  // ---------- 伞状视图：缩放 / 平移 ----------
-  function umbApply() {
-    const stage = canvas.querySelector('.umb-stage');
-    if (!stage) return;
-    stage.style.transform = 'translate(' + umbState.x.toFixed(1) + 'px, ' + umbState.y.toFixed(1)
-      + 'px) scale(' + umbState.scale.toFixed(3) + ')';
-    umbLabel.textContent = Math.round(umbState.scale * 100) + '%';
-    root.querySelector('#umb-in').disabled = umbState.scale >= 3;
-    root.querySelector('#umb-out').disabled = umbState.scale <= 0.2;
-  }
-
-  function umbCenter(scale) {
-    const vp = canvas.querySelector('.umb-viewport');
-    const stage = canvas.querySelector('.umb-stage');
-    if (!vp || !stage) return;
-    const W = Number(stage.dataset.w) || 1;
-    const H = Number(stage.dataset.h) || 1;
-    umbState.scale = scale;
-    umbState.x = (vp.clientWidth - W * scale) / 2;
-    umbState.y = (vp.clientHeight - H * scale) / 2;
-    umbState.ready = true;
-    umbState.auto = true;
-    umbApply();
-  }
-
-  function umbFit(minScale = 0.2) {
-    const vp = canvas.querySelector('.umb-viewport');
-    const stage = canvas.querySelector('.umb-stage');
-    if (!vp || !stage) return;
-    const W = Number(stage.dataset.w) || 1;
-    const H = Number(stage.dataset.h) || 1;
-    const s = Math.min((vp.clientWidth - 20) / W, (vp.clientHeight - 20) / H, 1);
-    umbCenter(Math.max(minScale, Math.min(1, s)));
-  }
-
-  function umbCenterOn(id) {
-    const vp = canvas.querySelector('.umb-viewport');
-    const nodeEl = canvas.querySelector('.umb-node[data-person="' + CSS.escape(id) + '"]');
-    if (!vp || !nodeEl) return;
-    const nx = Number(nodeEl.dataset.x) || 0;
-    const ny = Number(nodeEl.dataset.y) || 0;
-    umbState.x = vp.clientWidth / 2 - nx * umbState.scale;
-    umbState.y = vp.clientHeight / 2 - ny * umbState.scale;
-    umbApply();
-  }
-
-  function bindUmbGestures() {
-    const vp = canvas.querySelector('.umb-viewport');
-    if (!vp || vp.dataset.gesture === '1') return;
-    vp.dataset.gesture = '1';
-
-    const pointers = new Map();
-    let dragging = false;
-    let moved = 0;
-    let last = { x: 0, y: 0 };
-    let pinchStart = null;
-    let captured = false;   // 只在真正拖动后才捕获指针，否则 click 会被劫持到视口
-
-    const localPoint = (e) => {
-      const r = vp.getBoundingClientRect();
-      return { x: e.clientX - r.left, y: e.clientY - r.top };
-    };
-
-    vp.addEventListener('wheel', (e) => {
-      if (!canvas.querySelector('.umb-stage')) return;
-      e.preventDefault();
-      const p = localPoint(e);
-      const factor = Math.exp(-e.deltaY * 0.0016);
-      const next = Math.min(3, Math.max(0.2, umbState.scale * factor));
-      const k = next / umbState.scale;
-      umbState.x = p.x - (p.x - umbState.x) * k;
-      umbState.y = p.y - (p.y - umbState.y) * k;
-      umbState.scale = next;
-      umbState.auto = false;
-      umbApply();
-    }, { passive: false });
-
-    vp.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('[data-toggle]')) return;   // 展开按钮优先
-      pointers.set(e.pointerId, localPoint(e));
-      moved = 0;
-      dragging = true;
-      last = localPoint(e);
-      if (pointers.size === 2) {
-        const pts = [...pointers.values()];
-        pinchStart = {
-          dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1,
-          scale: umbState.scale,
-          mid: { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 },
-          x: umbState.x, y: umbState.y,
-        };
-      }
-      // 注意：这里不捕获指针，否则 pointerup 会落在视口上，click 不再派发给卡片
-    });
-
-    vp.addEventListener('pointermove', (e) => {
-      if (!pointers.has(e.pointerId)) return;
-      const p = localPoint(e);
-      pointers.set(e.pointerId, p);
-
-      if (pointers.size >= 2 && pinchStart) {
-        const pts = [...pointers.values()];
-        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
-        const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
-        const next = Math.min(3, Math.max(0.2, pinchStart.scale * (dist / pinchStart.dist)));
-        const k = next / pinchStart.scale;
-        umbState.scale = next;
-        umbState.x = mid.x - (pinchStart.mid.x - pinchStart.x) * k;
-        umbState.y = mid.y - (pinchStart.mid.y - pinchStart.y) * k;
-        moved = 99;
-        umbApply();
-        return;
-      }
-
-      if (!dragging) return;
-      const dx = p.x - last.x;
-      const dy = p.y - last.y;
-      last = p;
-      moved += Math.abs(dx) + Math.abs(dy);
-      if (moved < 3) return;
-      if (!captured && vp.setPointerCapture) {
-        try { vp.setPointerCapture(e.pointerId); captured = true; } catch { /* 已释放 */ }
-      }
-      umbState.x += dx;
-      umbState.auto = false;
-      umbState.y += dy;
-      umbApply();
-    });
-
-    const endPointer = (e) => {
-      if (!pointers.has(e.pointerId)) return;
-      pointers.delete(e.pointerId);
-      if (captured && vp.releasePointerCapture && vp.hasPointerCapture && vp.hasPointerCapture(e.pointerId)) {
-        try { vp.releasePointerCapture(e.pointerId); } catch { /* 忽略 */ }
-        captured = false;
-      }
-      if (pointers.size < 2) pinchStart = null;
-      if (pointers.size === 0) {
-        dragging = false;
-        // 拖动后抑制一次点击，避免误入档案页
-        if (moved > 6) {
-          vp.dataset.suppressClick = '1';
-          setTimeout(() => { delete vp.dataset.suppressClick; }, 0);
-        }
-      }
-    };
-    vp.addEventListener('pointerup', endPointer);
-    vp.addEventListener('pointercancel', endPointer);
-
-    vp.addEventListener('click', (e) => {
-      if (vp.dataset.suppressClick === '1') {
-        e.stopPropagation();
-        e.preventDefault();
-      }
-    }, true);
-  }
-
   // ---------- 统一渲染 ----------
   function renderCurrent() {
     if (!lastData) return;
     if (!lastData.roots.length) {
       canvas.innerHTML = '<div class="empty"><div class="empty-mark">谱</div>该筛选条件下暂无成员</div>';
       zoomBar.hidden = layout !== 'org';
-      umbTools.hidden = layout !== 'umb';
       return;
     }
 
-    if (layout === 'umb') {
-      const result = layoutUmbrella(lastData.roots, {
-        collapsed: collapsedIds,
-        maxNodes: 400,
-      });
-      canvas.innerHTML = renderUmbrella(result, { selectedId });
-      // 卡片点击/键盘跳转与其它模式共用同一套事件（函数内部有幂等守卫）
-      wireTree(canvas);
-      // 坐标走 CSSOM（CSP 禁止内联 style）
-      canvas.querySelectorAll('.umb-node').forEach((el) => {
-        el.style.left = el.dataset.x + 'px';
-        el.style.top = el.dataset.y + 'px';
-      });
-      const stage = canvas.querySelector('.umb-stage');
-      if (stage) {
-        stage.style.width = stage.dataset.w + 'px';
-        stage.style.height = stage.dataset.h + 'px';
-        stage.style.transformOrigin = '0 0';
-      }
-      if (!umbState.ready) {
-        // 初始保持可读比例（不小于 45%），超出的部分用拖拽查看；
-        // 需要全景时点「适应画布」。
-        umbFit(0.45);
-      } else {
-        umbApply();
-      }
-      bindUmbGestures();
-    } else {
-      canvas.innerHTML = layout === 'org'
-        ? renderOrgChart(lastData.roots, { zoom: zoom / 100 })
-        : renderTreeNodes(lastData.roots);
-      wireTree(canvas);
-      if (layout === 'org') applyZoom(zoom);
-      applyCollapsedToDom();
-    }
+    canvas.innerHTML = layout === 'org'
+      ? renderOrgChart(lastData.roots, { zoom: zoom / 100 })
+      : renderTreeNodes(lastData.roots);
+    wireTree(canvas);
+    if (layout === 'org') applyZoom(zoom);
+    applyCollapsedToDom();
 
     zoomBar.hidden = layout !== 'org';
-    umbTools.hidden = layout !== 'umb';
     root.querySelectorAll('[data-layout]').forEach((b) => {
       b.classList.toggle('is-active', b.dataset.layout === layout);
       b.setAttribute('aria-pressed', String(b.dataset.layout === layout));
@@ -407,9 +209,7 @@ let layout = savedLayout();
     if (note) {
       note.textContent = layout === 'org'
         ? '父节点在上、子节点在下；点 ▾ 展开/收起，可滚动或用缩放栏查看'
-        : layout === 'umb'
-          ? '根居中心、子代呈伞骨铺开；点 ▾ 展开/收起，滚轮缩放、拖拽平移'
-          : '同一行的配偶并列显示，子女挂在下方';
+        : '同一行的配偶并列显示，子女挂在下方';
     }
   }
 
@@ -422,7 +222,6 @@ let layout = savedLayout();
       const data = await api('/api/tree?' + params.toString());
       lastData = data;
       collapsedIds = defaultCollapsed(data.roots, depthSel.value);
-      umbState.ready = false;
       renderCurrent();
       summary.textContent = '共 ' + data.total + ' 位成员'
         + (stats.aliveGenerations >= 5 ? ' · 五世同堂（5 代在世）' : '')
@@ -464,25 +263,19 @@ let layout = savedLayout();
 
   function setAll(collapsed) {
     collapsedIds = collapsed ? allParentIds(lastData ? lastData.roots : []) : new Set();
-    if (layout === 'umb') {
-      renderCurrent();
-      return;
-    }
     canvas.querySelectorAll('.tree-children, .org-children').forEach((ul) => ul.classList.toggle('collapsed', collapsed));
     canvas.querySelectorAll('[data-toggle]').forEach((btn) => { btn.textContent = collapsed ? '\u25b8' : '\u25be'; });
     canvas.querySelectorAll('.org-node, .tree li').forEach((li) => li.classList.toggle('has-collapsed', collapsed));
   }
 
-  // 布局切换（三种模式共用同一份数据、收起集合与选中节点）
+  // 布局切换（两种模式共用同一份数据、收起集合与选中节点）
   root.querySelectorAll('[data-layout]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (layout !== 'umb') collapsedIds = readCollapsedFromDom();
+      collapsedIds = readCollapsedFromDom();
       const next = btn.dataset.layout;
-      layout = next === 'org' || next === 'umb' ? next : 'list';
+      layout = next === 'org' ? 'org' : 'list';
       localStorage.setItem(LAYOUT_KEY, layout);
-      umbState.ready = false;
       renderCurrent();
-      if (layout === 'umb') toast('已切换到伞状图：滚轮缩放、拖拽平移', 'ok');
       if (layout === 'org') toast('已切换到结构图：可滚动查看，用缩放栏调整大小', 'ok');
     });
   });
@@ -492,35 +285,11 @@ let layout = savedLayout();
   root.querySelector('#zoom-reset').addEventListener('click', () => applyZoom(100));
   root.querySelector('#zoom-fit').addEventListener('click', fitWidth);
 
-  function umbZoomBy(ratio) {
-    const vp = canvas.querySelector('.umb-viewport');
-    const p = vp ? { x: vp.clientWidth / 2, y: vp.clientHeight / 2 } : { x: 0, y: 0 };
-    const next = Math.min(3, Math.max(0.2, umbState.scale * ratio));
-    const k = next / umbState.scale;
-    umbState.x = p.x - (p.x - umbState.x) * k;
-    umbState.y = p.y - (p.y - umbState.y) * k;
-    umbState.scale = next;
-    umbState.auto = false;
-    umbApply();
-  }
-  root.querySelector('#umb-out').addEventListener('click', () => umbZoomBy(1 / 1.2));
-  root.querySelector('#umb-in').addEventListener('click', () => umbZoomBy(1.2));
-  root.querySelector('#umb-fit').addEventListener('click', () => umbFit());
-  root.querySelector('#umb-reset').addEventListener('click', () => umbCenter(1));
 
-  // 展开/收起：列表与结构图同步箭头，伞状图重排
+  // 展开/收起：列表与结构图同步箭头
   canvas.addEventListener('click', (e) => {
     const toggle = e.target.closest('[data-toggle]');
     if (!toggle) return;
-    if (layout === 'umb') {
-      const nodeEl = toggle.closest('.umb-node');
-      const id = nodeEl && nodeEl.dataset.person;
-      if (!id) return;
-      if (collapsedIds.has(id)) collapsedIds.delete(id);
-      else collapsedIds.add(id);
-      renderCurrent();
-      return;
-    }
     const li = toggle.closest('li');
     const kids = li ? li.querySelector(':scope > .tree-children, :scope > .org-children') : null;
     if (kids) li.classList.toggle('has-collapsed', kids.classList.contains('collapsed'));
@@ -602,33 +371,19 @@ let layout = savedLayout();
     const id = btn.dataset.jump;
     results.hidden = true;
     searchInput.value = '';
-    // 记录选中节点：切换布局时据此恢复高亮与视野
+    // 记录选中节点：切换布局时据此恢复高亮
     selectedId = id;
     localStorage.setItem('ft_tree_selected', id);
     collapsedIds = new Set();
     renderCurrent();
-    if (layout === 'umb') {
-      umbCenterOn(id);
-    } else {
-      const card = canvas.querySelector('[data-person="' + CSS.escape(id) + '"]');
-      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
     const target = canvas.querySelector('[data-person="' + CSS.escape(id) + '"]');
     if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
       target.classList.add('flash');
       setTimeout(() => target.classList.remove('flash'), 2200);
     }
   });
 
-  // 窗口尺寸变化：用户未手动缩放/平移时，自动重新适配画布
-  if (treeResizeHandler) window.removeEventListener('resize', treeResizeHandler);
-  let resizeTimer = null;
-  treeResizeHandler = () => {
-    if (layout !== 'umb' || !umbState.auto) return;
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { if (layout === 'umb') umbFit(); }, 180);
-  };
-  window.addEventListener('resize', treeResizeHandler);
 
   if (treeHideHandler) document.removeEventListener('click', treeHideHandler);
   treeHideHandler = (e) => { if (!e.target.closest('.search-box')) results.hidden = true; };

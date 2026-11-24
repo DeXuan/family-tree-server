@@ -7,7 +7,7 @@
  * - API 请求：**完全不缓存**（族谱数据有时效性与权限，绝不能离线下发旧数据）
  */
 
-const VERSION = 'v4';
+const VERSION = 'v5';
 const SHELL_CACHE = `ft-shell-${VERSION}`;
 const ASSET_CACHE = `ft-asset-${VERSION}`;
 
@@ -25,7 +25,6 @@ const SHELL_FILES = [
   './icon-512.svg',
   './js/lib/format.js',
   './js/lib/imageCompress.js',
-  './js/lib/radialLayout.js',
   './js/components/personPicker.js',
   './js/components/placeMap.js',
   './js/components/tree.js',
