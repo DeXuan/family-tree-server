@@ -65,12 +65,51 @@ export function renderTreeNodes(nodes, { mini = false } = {}) {
   return `<ul class="tree">${nodes.map(node).join('')}</ul>`;
 }
 
+/**
+ * 自上而下的结构图（org-chart）布局。
+ * 与缩进列表共用同一套卡片、展开按钮与点击跳转，只是容器结构换成
+ * 「父在上、子在下一行居中展开」，连线由 CSS 伪元素绘制。
+ *
+ * @param {Array} nodes 与 renderTreeNodes 相同的树数据
+ * @param {object} opts
+ * @param {number} opts.zoom 初始缩放（0.5–1.5，1 = 原尺寸）
+ */
+export function renderOrgChart(nodes, { zoom = 1 } = {}) {
+  const node = (n) => {
+    const hasKids = n.children && n.children.length;
+    const spouses = n.spouses || [];
+    return `
+      <li class="org-node">
+        <div class="org-self">
+          ${hasKids
+            ? `<button class="tree-toggle" type="button" data-toggle aria-label="展开或收起">▾</button>`
+            : `<span class="tree-toggle" aria-hidden="true"></span>`}
+          <div class="couple">
+            ${card(n)}
+            ${spouses.map(spouseChip).join('')}
+          </div>
+        </div>
+        ${hasKids ? `<ul class="org-children">${n.children.map(node).join('')}</ul>` : ''}
+      </li>`;
+  };
+  const pct = Math.round(Math.min(1.5, Math.max(0.5, Number(zoom) || 1)) * 100);
+  return `
+    <div class="org-viewport">
+      <div class="org-stage" data-zoom="${pct}">
+        <ul class="org-tree">${nodes.map(node).join('')}</ul>
+      </div>
+    </div>`;
+}
+
 export function wireTree(container) {
+  // 容器会被反复重渲染复用：只绑定一次，避免监听器叠加导致「点一次切换两次」
+  if (container.dataset.treeWired === '1') return;
+  container.dataset.treeWired = '1';
   container.addEventListener('click', (e) => {
     const toggle = e.target.closest('[data-toggle]');
     if (toggle) {
       const li = toggle.closest('li');
-      const kids = li.querySelector(':scope > .tree-children');
+      const kids = li.querySelector(':scope > .tree-children, :scope > .org-children');
       if (kids) {
         kids.classList.toggle('collapsed');
         toggle.textContent = kids.classList.contains('collapsed') ? '▸' : '▾';

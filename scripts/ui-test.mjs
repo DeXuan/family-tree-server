@@ -118,6 +118,69 @@ try {
   copySummaryBtn === 1 ? pass('世系树提供复制摘要') : fail('缺少复制摘要');
   await shot('03-tree');
   pass('世系树截图');
+  // 3b. 布局模式：缩进列表 ⇄ 自上而下结构图
+  console.log('  布局切换：');
+  const segCount = await page.locator('[data-layout]').count();
+  segCount === 2 ? pass('提供两种布局切换按钮') : fail('布局切换按钮', String(segCount));
+  const zoomHiddenInList = await page.locator('#org-zoom').isHidden();
+  zoomHiddenInList ? pass('列表模式隐藏缩放栏') : fail('列表模式未隐藏缩放栏');
+
+  await page.click('[data-layout="org"]');
+  await page.waitForSelector('.org-tree', { timeout: 8000 });
+  const orgOk = (await page.locator('.org-tree').count()) === 1 && (await page.locator('.tree').count()) === 0;
+  orgOk ? pass('切换到结构图模式') : fail('结构图未渲染');
+  const orgCards = await page.locator('.org-tree .person-card').count();
+  orgCards >= 20 ? pass(`结构图渲染 ${orgCards} 张卡片`) : fail('结构图卡片数量', String(orgCards));
+  const zoomVisible = await page.locator('#org-zoom').isVisible();
+  zoomVisible ? pass('结构图显示缩放栏') : fail('缩放栏未显示');
+
+  // 父子连线：子节点带 1px 竖线
+  const connector = await page.evaluate(() => {
+    const li = document.querySelector('.org-children > .org-node');
+    if (!li) return null;
+    const cs = getComputedStyle(li, '::after');
+    return { w: cs.borderLeftWidth, h: cs.height };
+  });
+  (connector && connector.w === '1px' && parseFloat(connector.h) > 0)
+    ? pass('父子节点连线已绘制')
+    : fail('缺少父子连线', JSON.stringify(connector));
+
+  // 展开 / 收起
+  const firstToggle = page.locator('.org-tree [data-toggle]').first();
+  const firstLi = firstToggle.locator('xpath=ancestor::li[1]');
+  const firstKids = firstLi.locator(':scope > .org-children');
+  await firstToggle.click(); await page.waitForTimeout(200);
+  const collapsed = await firstKids.evaluate((el) => el.classList.contains('collapsed'));
+  const arrowCollapsed = (await firstToggle.innerText()).trim() === '▸';
+  (collapsed && arrowCollapsed) ? pass('结构图节点可收起') : fail('收起失败');
+  await firstToggle.click(); await page.waitForTimeout(200);
+  const reExpanded = !(await firstKids.evaluate((el) => el.classList.contains('collapsed')));
+  reExpanded ? pass('结构图节点可再展开') : fail('展开失败');
+
+  // 缩放
+  const z0 = (await page.locator('#zoom-label').innerText()).trim();
+  await page.click('#zoom-in'); await page.waitForTimeout(150);
+  const z1 = (await page.locator('#zoom-label').innerText()).trim();
+  const zoomApplied = await page.locator('.org-stage').evaluate((el) => el.style.zoom);
+  (z0 !== z1 && parseFloat(zoomApplied) > 1) ? pass(`缩放生效 ${z0}→${z1}`) : fail('缩放', `${z0}->${z1} ${zoomApplied}`);
+  await page.click('#zoom-reset'); await page.waitForTimeout(150);
+  (await page.locator('#zoom-label').innerText()).trim() === '100%' ? pass('缩放可重置') : fail('重置缩放');
+
+  // 可滚动
+  const scrollOk = await page.locator('.org-viewport').evaluate((el) => {
+    const oy = getComputedStyle(el).overflowY;
+    return oy === 'auto' || oy === 'scroll';
+  });
+  scrollOk ? pass('结构图视口可滚动') : fail('视口不可滚动');
+
+  await shot('03b-tree-org');
+  pass('结构图截图');
+
+  // 切回列表
+  await page.click('[data-layout="list"]'); await page.waitForTimeout(300);
+  (await page.locator('.tree').count()) === 1 ? pass('可切回缩进列表') : fail('切回列表失败');
+  (await page.locator('#org-zoom').isHidden()) ? pass('切回列表后隐藏缩放栏') : fail('切回列表后缩放栏仍显示');
+
 
   // 展开全部
   await page.click('#expand-all');
